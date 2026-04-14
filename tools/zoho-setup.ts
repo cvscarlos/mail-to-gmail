@@ -66,11 +66,19 @@ async function run() {
     }
 
     console.log(chalk.green.bold('\n✅ Success!'));
+    console.log(chalk.yellow('Copy and paste the following into your .env file:\n'));
+    
+    const envBlock = [
+      `ZOHO_DC="${answers.dc}"`,
+      `ZOHO_CLIENT_ID="${answers.clientId}"`,
+      `ZOHO_CLIENT_SECRET="${answers.clientSecret}"`,
+      `ZOHO_REFRESH_TOKEN="${resp.data.refresh_token}"`
+    ].join('\n');
+
     console.log(chalk.gray('-----------------------------------'));
-    console.log(`${chalk.bold('Refresh Token:')} ${chalk.green(resp.data.refresh_token)}`);
+    console.log(chalk.white(envBlock));
     console.log(chalk.gray('-----------------------------------'));
-    console.log(chalk.yellow('\nUpdate your .env file with this token.'));
-    console.log(chalk.gray('Note: The refresh token does not expire unless you revoke it.\n'));
+    console.log(chalk.gray('\nNote: The refresh token does not expire unless you revoke it.\n'));
   } catch (err: any) {
     const errorMsg = err.response?.data?.error || err.message;
     console.error(chalk.red.bold(`\n❌ Error: ${errorMsg}`));
