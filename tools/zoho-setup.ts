@@ -33,41 +33,49 @@ async function run() {
     }
   }
 
-  const answers = await inquirer.prompt([
-    {
-      type: 'list',
-      name: 'dc',
-      message: 'Select your Zoho Data Center (DC):',
-      choices: ['com', 'eu', 'in', 'com.au', 'com.cn'],
-      default: envDefaults.dc || 'com',
-    },
-    {
-      type: 'input',
-      name: 'clientId',
-      message: 'Enter your Client ID:',
-      default: envDefaults.clientId,
-      validate: (input) => input.length > 0 || 'Client ID is required',
-    },
-    {
-      type: 'password',
-      name: 'clientSecret',
-      message: envDefaults.clientSecret 
-        ? 'Enter your Client Secret (leave blank to keep existing):' 
-        : 'Enter your Client Secret:',
-      mask: '*',
-      validate: (input) => {
-        if (envDefaults.clientSecret && input.length === 0) return true;
-        return input.length > 0 || 'Client Secret is required';
+  let answers: any;
+  try {
+    answers = await inquirer.prompt([
+      {
+        type: 'list',
+        name: 'dc',
+        message: 'Select your Zoho Data Center (DC):',
+        choices: ['com', 'eu', 'in', 'com.au', 'com.cn'],
+        default: envDefaults.dc || 'com',
       },
-    },
-    {
-      type: 'input',
-      name: 'code',
-      message: 'Enter the Authorization Code you generated:',
-      validate: (input) => input.length > 0 || 'Authorization Code is required',
-    },
-  ]);
-
+      {
+        type: 'input',
+        name: 'clientId',
+        message: 'Enter your Client ID:',
+        default: envDefaults.clientId,
+        validate: (input) => input.length > 0 || 'Client ID is required',
+      },
+      {
+        type: 'password',
+        name: 'clientSecret',
+        message: envDefaults.clientSecret
+          ? 'Enter your Client Secret (leave blank to keep existing):'
+          : 'Enter your Client Secret:',
+        mask: '*',
+        validate: (input) => {
+          if (envDefaults.clientSecret && input.length === 0) return true;
+          return input.length > 0 || 'Client Secret is required';
+        },
+      },
+      {
+        type: 'input',
+        name: 'code',
+        message: 'Enter the Authorization Code you generated:',
+        validate: (input) => input.length > 0 || 'Authorization Code is required',
+      },
+    ]);
+  } catch (err: any) {
+    if (err.name === 'ExitPromptError' || err.message?.includes('force closed')) {
+      console.log(chalk.yellow('\n\n👋 Operation cancelled by user. Bye!'));
+      process.exit(0);
+    }
+    throw err;
+  }
   const finalClientSecret = answers.clientSecret || envDefaults.clientSecret;
   const url = `https://accounts.zoho.${answers.dc}/oauth/v2/token`;
 
