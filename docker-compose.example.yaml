@@ -1,0 +1,10 @@
+services:
+  mail-bridge:
+    build: .
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - .env
+    environment:
+      - STATE_DB_PATH=/app/data/mail-bridge.db
+    restart: "no" # Run via external scheduler/cron
