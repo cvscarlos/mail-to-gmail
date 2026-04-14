@@ -21,7 +21,10 @@ Zoho Mail's free tier often restricts POP/IMAP access. `mail-bridge` uses the Zo
 2. Create a **Self Client**.
 3. Copy the **Client ID** and **Client Secret**.
 4. In the "Generate Code" tab, use the scope `ZohoMail.messages.READ,ZohoMail.accounts.READ`.
-5. Exchange the generated code for a **Refresh Token** using `curl` or a tool like Postman.
+5. Exchange the generated code for a **Refresh Token** using the included wizard:
+   ```bash
+   npm run setup:zoho
+   ```
 
 ### 2. Gmail Setup
 1. Enable **IMAP** in your Gmail settings.
