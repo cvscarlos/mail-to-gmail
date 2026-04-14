@@ -21,7 +21,7 @@ Zoho Mail's free tier often restricts POP/IMAP access. `mail-bridge` uses the Zo
 1. Go to the [Zoho API Console](https://api-console.zoho.com/).
 2. Create a **Self Client**.
 3. Copy the **Client ID** and **Client Secret**.
-4. In the "Generate Code" tab, use the scope `ZohoMail.messages.READ,ZohoMail.accounts.READ`.
+4. In the "Generate Code" tab, use the scope `ZohoMail.messages.READ,ZohoMail.accounts.READ,ZohoMail.folders.READ`.
 5. Exchange the generated code for a **Refresh Token** using the included wizard:
    ```bash
    npm run setup:zoho

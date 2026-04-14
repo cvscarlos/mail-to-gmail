@@ -54,12 +54,17 @@ export class ZohoMailApiSource implements SourceProvider {
   }
 
   private async discoverAccountId(): Promise<string> {
-    const resp = await this.http.get(this.getAccountsUrl());
-    const accounts = resp.data.data;
-    if (!accounts || accounts.length === 0) {
-      throw new Error('No Zoho accounts found');
+    try {
+      const resp = await this.http.get(this.getAccountsUrl());
+      const accounts = resp.data.data;
+      if (!accounts || accounts.length === 0) {
+        throw new Error('No Zoho accounts found');
+      }
+      return accounts[0].accountId;
+    } catch (err: any) {
+      console.error(`Zoho discoverAccountId failed: ${err.response?.status} - ${JSON.stringify(err.response?.data)}`);
+      throw err;
     }
-    return accounts[0].accountId;
   }
 
   async getAccountId(): Promise<string> {
@@ -88,26 +93,25 @@ export class ZohoMailApiSource implements SourceProvider {
         limit: 100,
       };
 
-      if (checkpoint.lastReceivedAt) {
-        // Zoho API doesn't have a direct "since" param in this endpoint,
-        // we fetch recent and filter locally or use search.
-        // Viewing messages is usually enough for idempotent runs.
+      try {
+        const resp = await this.http.get(url, { params });
+        const messages = resp.data.data || [];
+
+        allMessages = allMessages.concat(
+          messages.map((m: any) => ({
+            id: m.messageId,
+            receivedAt: new Date(parseInt(m.receivedTime)),
+            subject: m.subject,
+            from: m.sender,
+            folderId: folder.folderId,
+            folderName: folder.folderName,
+            rawSize: parseInt(m.size),
+          }))
+        );
+      } catch (err: any) {
+        console.error(`Zoho view messages failed for folder ${folder.folderName}: ${err.response?.status} - ${JSON.stringify(err.response?.data)}`);
+        throw err;
       }
-
-      const resp = await this.http.get(url, { params });
-      const messages = resp.data.data || [];
-
-      allMessages = allMessages.concat(
-        messages.map((m: any) => ({
-          id: m.messageId,
-          receivedAt: new Date(parseInt(m.receivedTime)),
-          subject: m.subject,
-          from: m.sender,
-          folderId: folder.folderId,
-          folderName: folder.folderName,
-          rawSize: parseInt(m.size),
-        }))
-      );
     }
 
     // Filter by checkpoint if available
@@ -121,10 +125,15 @@ export class ZohoMailApiSource implements SourceProvider {
   }
 
   private async getFolders(accountId: string): Promise<any[]> {
-    const resp = await this.http.get(
-      `https://mail.zoho.${this.config.dc}/api/accounts/${accountId}/folders`
-    );
-    return resp.data.data || [];
+    try {
+      const resp = await this.http.get(
+        `https://mail.zoho.${this.config.dc}/api/accounts/${accountId}/folders`
+      );
+      return resp.data.data || [];
+    } catch (err: any) {
+      console.error(`Zoho getFolders failed: ${err.response?.status} - ${JSON.stringify(err.response?.data)}`);
+      throw err;
+    }
   }
 
   async fetchRawMessage(messageRef: MessageRef): Promise<Buffer> {

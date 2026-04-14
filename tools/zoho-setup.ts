@@ -12,10 +12,7 @@ async function run() {
   console.log(chalk.white('1. Go to ') + chalk.underline('https://api-console.zoho.com/'));
   console.log(chalk.white('2. Create a "Self Client"'));
   console.log(chalk.white('3. Copy Client ID and Client Secret'));
-  console.log(
-    chalk.white('4. In "Generate Code", use scopes: ') +
-      chalk.bold('ZohoMail.messages.READ,ZohoMail.accounts.READ')
-  );
+  console.log(chalk.white('4. In "Generate Code", use scopes: ') + chalk.bold('ZohoMail.messages.READ,ZohoMail.accounts.READ,ZohoMail.folders.READ'));
   console.log(chalk.white('5. Copy the generated Authorization Code\n'));
 
   const answers = await inquirer.prompt([
