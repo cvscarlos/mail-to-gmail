@@ -1,6 +1,8 @@
 node_modules/
 dist/
+tmp/
+
 .env
+filter.json
 *.db
 *.db.lock
-tmp/

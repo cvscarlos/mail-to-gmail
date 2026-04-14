@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3';
+import Database from 'libsql';
 import { StateStore, SyncCheckpoint, SyncRecord } from './types.js';
 
 export class SqliteStateStore implements StateStore {

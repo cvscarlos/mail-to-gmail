@@ -44,6 +44,7 @@ export class SyncEngine {
 
     const candidates = await this.source.listCandidateMessages(checkpoint, {
       folders: options.sourceFolders,
+      limit: options.maxMessages,
     });
     this.logger.info(`${mode}Found ${candidates.length} candidate messages`);
 

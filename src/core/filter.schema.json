@@ -3,6 +3,9 @@
   "title": "SyncFilter",
   "type": "object",
   "properties": {
+    "$schema": {
+      "type": "string"
+    },
     "subjectContains": {
       "type": "string",
       "description": "Case-insensitive substring to filter messages by subject."

@@ -62,7 +62,11 @@ export class ZohoMailApiSource implements SourceProvider {
       }
       return accounts[0].accountId;
     } catch (err: any) {
-      console.error(`Zoho discoverAccountId failed: ${err.response?.status} - ${JSON.stringify(err.response?.data)}`);
+      if (err.response) {
+        throw new Error(
+          `Zoho discoverAccountId failed: ${err.response.status} - ${JSON.stringify(err.response.data)}`
+        );
+      }
       throw err;
     }
   }
@@ -74,7 +78,7 @@ export class ZohoMailApiSource implements SourceProvider {
 
   async listCandidateMessages(
     checkpoint: SyncCheckpoint,
-    options?: { folders?: string[] }
+    options?: { folders?: string[]; limit?: number }
   ): Promise<MessageMetadata[]> {
     const accountId = await this.getAccountId();
 
@@ -88,29 +92,64 @@ export class ZohoMailApiSource implements SourceProvider {
 
     for (const folder of targetFolders) {
       const url = `https://mail.zoho.${this.config.dc}/api/accounts/${accountId}/messages/view`;
-      const params: any = {
-        folderid: folder.folderId,
-        limit: 100,
-      };
 
-      try {
-        const resp = await this.http.get(url, { params });
-        const messages = resp.data.data || [];
+      let start = 1;
+      // Zoho doc max is 200
+      const limitPerPage = Math.min(options?.limit || 200, 200);
+      let hasMore = true;
 
-        allMessages = allMessages.concat(
-          messages.map((m: any) => ({
-            id: m.messageId,
-            receivedAt: new Date(parseInt(m.receivedTime)),
-            subject: m.subject,
-            from: m.sender,
-            folderId: folder.folderId,
-            folderName: folder.folderName,
-            rawSize: parseInt(m.size),
-          }))
-        );
-      } catch (err: any) {
-        console.error(`Zoho view messages failed for folder ${folder.folderName}: ${err.response?.status} - ${JSON.stringify(err.response?.data)}`);
-        throw err;
+      let iterations = 0;
+      while (hasMore && allMessages.length < (options?.limit || Infinity)) {
+        iterations++;
+        if (iterations > 1000) {
+          throw new Error('Circuit breaker triggered: Too many pagination requests to Zoho');
+        }
+
+        const params: any = {
+          folderId: folder.folderId,
+          start: start,
+          limit: limitPerPage,
+          sortBy: 'date',
+          sortorder: 'false', // descending
+          status: 'all',
+          threadedMails: 'false',
+        };
+
+        try {
+          const resp = await this.http.get(url, { params });
+          const messages = resp.data.data || [];
+
+          if (!Array.isArray(messages) || messages.length === 0) {
+            hasMore = false;
+            break;
+          }
+
+          allMessages = allMessages.concat(
+            messages.map((m: any) => ({
+              id: m.messageId,
+              receivedAt: new Date(parseInt(m.receivedTime || m.receivedtime)),
+              subject: m.subject,
+              from: m.sender,
+              folderId: folder.folderId,
+              folderName: folder.folderName,
+              rawSize: parseInt(m.size),
+            }))
+          );
+
+          start += messages.length;
+
+          // Stop if we fetched less than we asked for, meaning we hit the end of the folder
+          if (messages.length < limitPerPage) {
+            hasMore = false;
+          }
+        } catch (err: any) {
+          if (err.response) {
+            throw new Error(
+              `Zoho view messages failed for folder ${folder.folderName}: ${err.response.status} - ${JSON.stringify(err.response.data)}`
+            );
+          }
+          throw err;
+        }
       }
     }
 
@@ -131,15 +170,19 @@ export class ZohoMailApiSource implements SourceProvider {
       );
       return resp.data.data || [];
     } catch (err: any) {
-      console.error(`Zoho getFolders failed: ${err.response?.status} - ${JSON.stringify(err.response?.data)}`);
+      if (err.response) {
+        throw new Error(
+          `Zoho getFolders failed: ${err.response.status} - ${JSON.stringify(err.response.data)}`
+        );
+      }
       throw err;
     }
   }
 
   async fetchRawMessage(messageRef: MessageRef): Promise<Buffer> {
-    const url = `https://mail.zoho.${this.config.dc}/api/accounts/${messageRef.accountId}/messages/${messageRef.id}/raw`;
+    const url = `https://mail.zoho.${this.config.dc}/api/accounts/${messageRef.accountId}/messages/${messageRef.id}/originalmessage`;
     const resp = await this.http.get(url);
-    // Zoho returns original MIME in the "content" field of the raw response
+    // Zoho returns original MIME in the "content" field of the originalmessage response
     const rawMime = resp.data.data.content;
     return Buffer.from(rawMime, 'utf-8');
   }

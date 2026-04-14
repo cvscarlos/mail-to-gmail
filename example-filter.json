@@ -1,4 +1,4 @@
 {
   "$schema": "./src/core/filter.schema.json",
-  "subjectContains": "newsletter"
+  "subjectContains": "Foo Bar"
 }

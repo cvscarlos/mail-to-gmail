@@ -43,6 +43,7 @@ cp .env.example .env
 ### 4. Running the Sync
 
 #### Using Node.js
+
 ```bash
 npm install
 npm start sync

@@ -6,7 +6,9 @@ import dotenv from 'dotenv';
 
 async function run() {
   console.log(chalk.bold.blue('\n--- Zoho OAuth Setup Wizard ---\n'));
-  console.log(chalk.cyan('This tool will help you get a Refresh Token for your Zoho Mail Bridge.\n'));
+  console.log(
+    chalk.cyan('This tool will help you get a Refresh Token for your Zoho Mail Bridge.\n')
+  );
 
   console.log(chalk.yellow('Prerequisites:'));
   console.log(chalk.white('1. Go to ') + chalk.underline('https://api-console.zoho.com/'));
@@ -32,17 +34,16 @@ async function run() {
 
       if (envDefaults.clientSecret) {
         const secret = envDefaults.clientSecret;
-        maskedSecret =
-          secret.length > 6 ? `${secret.substring(0, 6)}...***` : '*** (already set)';
+        maskedSecret = secret.length > 6 ? `${secret.substring(0, 6)}...***` : '*** (already set)';
       }
     } catch (err) {
       // Ignore errors reading existing env
     }
   }
 
-  let answers: any;
+  let answers: any = {};
   try {
-    answers = await inquirer.prompt([
+    const answersPart1 = await inquirer.prompt([
       {
         type: 'list',
         name: 'dc',
@@ -69,6 +70,14 @@ async function run() {
           return input.length > 0 || 'Client Secret is required';
         },
       },
+    ]);
+
+    console.log(chalk.yellow('\n⚠️  Make sure you generate the code with these exact scopes:'));
+    console.log(
+      chalk.bold.white('ZohoMail.messages.READ,ZohoMail.accounts.READ,ZohoMail.folders.READ\n')
+    );
+
+    const answersPart2 = await inquirer.prompt([
       {
         type: 'input',
         name: 'code',
@@ -76,6 +85,8 @@ async function run() {
         validate: (input) => input.length > 0 || 'Authorization Code is required',
       },
     ]);
+
+    answers = { ...answersPart1, ...answersPart2 };
   } catch (err: any) {
     if (err.name === 'ExitPromptError' || err.message?.includes('force closed')) {
       console.log(chalk.yellow('\n\n👋 Operation cancelled by user. Bye!'));
@@ -102,6 +113,56 @@ async function run() {
       throw new Error(resp.data.error);
     }
 
+    const accessToken = resp.data.access_token;
+    const refreshToken = resp.data.refresh_token;
+
+    console.log(chalk.blue('\nVerifying token permissions...'));
+
+    const apiClient = axios.create({
+      headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
+    });
+
+    try {
+      // 1. Test accounts.READ
+      const accountsResp = await apiClient.get(`https://mail.zoho.${answers.dc}/api/accounts`);
+      const accountId = accountsResp.data.data?.[0]?.accountId;
+      if (!accountId) throw new Error('Could not find a valid Zoho account.');
+      console.log(chalk.green(' ✓ ZohoMail.accounts.READ verified'));
+
+      // 2. Test folders.READ
+      const foldersResp = await apiClient.get(
+        `https://mail.zoho.${answers.dc}/api/accounts/${accountId}/folders`
+      );
+      const inboxFolderId = foldersResp.data.data?.find(
+        (f: any) => f.folderName === 'Inbox'
+      )?.folderId;
+      console.log(chalk.green(' ✓ ZohoMail.folders.READ verified'));
+
+      // 3. Test messages.READ
+      if (inboxFolderId) {
+        await apiClient.get(
+          `https://mail.zoho.${answers.dc}/api/accounts/${accountId}/messages/view?folderId=${inboxFolderId}&limit=1`
+        );
+      } else {
+        // Fallback if no Inbox found, just try to list messages with any folder ID if available
+        const firstFolderId = foldersResp.data.data?.[0]?.folderId;
+        if (firstFolderId) {
+          await apiClient.get(
+            `https://mail.zoho.${answers.dc}/api/accounts/${accountId}/messages/view?folderId=${firstFolderId}&limit=1`
+          );
+        }
+      }
+      console.log(chalk.green(' ✓ ZohoMail.messages.READ verified'));
+    } catch (verifyErr: any) {
+      const scopeError =
+        verifyErr.response?.data?.data?.errorCode ||
+        verifyErr.response?.data?.[1]?.errorCode ||
+        verifyErr.message;
+      throw new Error(
+        `Permission verification failed: ${scopeError}. Did you include all required scopes?`
+      );
+    }
+
     console.log(chalk.green.bold('\n✅ Success!'));
     console.log(chalk.yellow('Copy and paste the following into your .env file:\n'));
 
@@ -109,7 +170,7 @@ async function run() {
       `ZOHO_DC="${answers.dc}"`,
       `ZOHO_CLIENT_ID="${answers.clientId}"`,
       `ZOHO_CLIENT_SECRET="${finalClientSecret}"`,
-      `ZOHO_REFRESH_TOKEN="${resp.data.refresh_token}"`,
+      `ZOHO_REFRESH_TOKEN="${refreshToken}"`,
     ].join('\n');
 
     console.log(chalk.gray('-----------------------------------'));
