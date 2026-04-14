@@ -32,8 +32,6 @@ program.command('sync')
     });
 
     const destination = new GmailImapDestination({
-      host: config.GMAIL_IMAP_HOST,
-      port: config.GMAIL_IMAP_PORT,
       email: config.GMAIL_EMAIL,
       appPassword: config.GMAIL_APP_PASSWORD,
     });
@@ -97,8 +95,6 @@ program.command('test-destination')
   .action(async () => {
     const config = loadConfig();
     const destination = new GmailImapDestination({
-      host: config.GMAIL_IMAP_HOST,
-      port: config.GMAIL_IMAP_PORT,
       email: config.GMAIL_EMAIL,
       appPassword: config.GMAIL_APP_PASSWORD,
     });

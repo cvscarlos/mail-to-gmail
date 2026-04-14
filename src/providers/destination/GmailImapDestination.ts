@@ -2,11 +2,12 @@ import { ImapFlow } from 'imapflow';
 import { DestinationProvider, MessageMetadata } from '../../core/types.js';
 
 export interface GmailConfig {
-  host: string;
-  port: number;
   email: string;
   appPassword: string;
 }
+
+const GMAIL_IMAP_HOST = 'imap.gmail.com';
+const GMAIL_IMAP_PORT = 993;
 
 export class GmailImapDestination implements DestinationProvider {
   public name = 'gmail-imap';
@@ -14,8 +15,8 @@ export class GmailImapDestination implements DestinationProvider {
 
   constructor(private config: GmailConfig) {
     this.client = new ImapFlow({
-      host: config.host,
-      port: config.port,
+      host: GMAIL_IMAP_HOST,
+      port: GMAIL_IMAP_PORT,
       secure: true,
       auth: {
         user: config.email,

@@ -39,8 +39,7 @@ cp .env.example .env
 #### Using Node.js
 ```bash
 npm install
-npm run build
-node dist/index.js sync
+npm start sync
 ```
 
 #### Using Docker

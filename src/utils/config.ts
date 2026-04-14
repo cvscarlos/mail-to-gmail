@@ -14,8 +14,6 @@ const configSchema = z.object({
   ZOHO_ACCOUNT_ID: z.string().optional(),
   ZOHO_FOLDER_NAMES: z.string().default('Inbox'),
   
-  GMAIL_IMAP_HOST: z.string().default('imap.gmail.com'),
-  GMAIL_IMAP_PORT: z.coerce.number().default(993),
   GMAIL_EMAIL: z.string().email(),
   GMAIL_APP_PASSWORD: z.string(),
   GMAIL_TARGET_MAILBOX: z.string().default('INBOX'),
