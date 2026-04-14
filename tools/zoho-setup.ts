@@ -1,19 +1,37 @@
 import inquirer from 'inquirer';
 import axios from 'axios';
 import chalk from 'chalk';
+import fs from 'fs';
+import dotenv from 'dotenv';
 
 async function run() {
   console.log(chalk.bold.blue('\n--- Zoho OAuth Setup Wizard ---\n'));
-  console.log(
-    chalk.cyan('This tool will help you get a Refresh Token for your Zoho Mail Bridge.\n')
-  );
+  console.log(chalk.cyan('This tool will help you get a Refresh Token for your Zoho Mail Bridge.\n'));
 
   console.log(chalk.yellow('Prerequisites:'));
   console.log(chalk.white('1. Go to ') + chalk.underline('https://api-console.zoho.com/'));
   console.log(chalk.white('2. Create a "Self Client"'));
   console.log(chalk.white('3. Copy Client ID and Client Secret'));
-  console.log(chalk.white('4. In "Generate Code", use scopes: ') + chalk.bold('ZohoMail.messages.READ,ZohoMail.accounts.READ,ZohoMail.folders.READ'));
+  console.log(
+    chalk.white('4. In "Generate Code", use scopes: ') +
+      chalk.bold('ZohoMail.messages.READ,ZohoMail.accounts.READ,ZohoMail.folders.READ')
+  );
   console.log(chalk.white('5. Copy the generated Authorization Code\n'));
+
+  // Load existing env values if they exist
+  let envDefaults: any = {};
+  if (fs.existsSync('.env')) {
+    try {
+      const envConfig = dotenv.parse(fs.readFileSync('.env'));
+      envDefaults = {
+        dc: envConfig.ZOHO_DC,
+        clientId: envConfig.ZOHO_CLIENT_ID,
+        clientSecret: envConfig.ZOHO_CLIENT_SECRET,
+      };
+    } catch (err) {
+      // Ignore errors reading existing env
+    }
+  }
 
   const answers = await inquirer.prompt([
     {
@@ -21,20 +39,26 @@ async function run() {
       name: 'dc',
       message: 'Select your Zoho Data Center (DC):',
       choices: ['com', 'eu', 'in', 'com.au', 'com.cn'],
-      default: 'com',
+      default: envDefaults.dc || 'com',
     },
     {
       type: 'input',
       name: 'clientId',
       message: 'Enter your Client ID:',
+      default: envDefaults.clientId,
       validate: (input) => input.length > 0 || 'Client ID is required',
     },
     {
       type: 'password',
       name: 'clientSecret',
-      message: 'Enter your Client Secret:',
+      message: envDefaults.clientSecret 
+        ? 'Enter your Client Secret (leave blank to keep existing):' 
+        : 'Enter your Client Secret:',
       mask: '*',
-      validate: (input) => input.length > 0 || 'Client Secret is required',
+      validate: (input) => {
+        if (envDefaults.clientSecret && input.length === 0) return true;
+        return input.length > 0 || 'Client Secret is required';
+      },
     },
     {
       type: 'input',
@@ -44,6 +68,7 @@ async function run() {
     },
   ]);
 
+  const finalClientSecret = answers.clientSecret || envDefaults.clientSecret;
   const url = `https://accounts.zoho.${answers.dc}/oauth/v2/token`;
 
   try {
@@ -52,7 +77,7 @@ async function run() {
     const params = new URLSearchParams({
       code: answers.code,
       client_id: answers.clientId,
-      client_secret: answers.clientSecret,
+      client_secret: finalClientSecret,
       grant_type: 'authorization_code',
     });
 
@@ -64,12 +89,12 @@ async function run() {
 
     console.log(chalk.green.bold('\n✅ Success!'));
     console.log(chalk.yellow('Copy and paste the following into your .env file:\n'));
-    
+
     const envBlock = [
       `ZOHO_DC="${answers.dc}"`,
       `ZOHO_CLIENT_ID="${answers.clientId}"`,
-      `ZOHO_CLIENT_SECRET="${answers.clientSecret}"`,
-      `ZOHO_REFRESH_TOKEN="${resp.data.refresh_token}"`
+      `ZOHO_CLIENT_SECRET="${finalClientSecret}"`,
+      `ZOHO_REFRESH_TOKEN="${resp.data.refresh_token}"`,
     ].join('\n');
 
     console.log(chalk.gray('-----------------------------------'));
