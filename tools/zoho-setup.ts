@@ -1,15 +1,17 @@
 import inquirer from 'inquirer';
 import axios from 'axios';
+import chalk from 'chalk';
 
 async function run() {
-  console.log('--- Zoho OAuth Setup Wizard ---');
-  console.log('This tool will help you get a Refresh Token for your Zoho Mail Bridge.\n');
-  console.log('Prerequisites:');
-  console.log('1. Go to https://api-console.zoho.com/');
-  console.log('2. Create a "Self Client"');
-  console.log('3. Copy Client ID and Client Secret');
-  console.log('4. In "Generate Code", use scopes: ZohoMail.messages.READ,ZohoMail.accounts.READ');
-  console.log('5. Copy the generated Authorization Code\n');
+  console.log(chalk.bold.blue('\n--- Zoho OAuth Setup Wizard ---\n'));
+  console.log(chalk.cyan('This tool will help you get a Refresh Token for your Zoho Mail Bridge.\n'));
+  
+  console.log(chalk.yellow('Prerequisites:'));
+  console.log(chalk.white('1. Go to ') + chalk.underline('https://api-console.zoho.com/'));
+  console.log(chalk.white('2. Create a "Self Client"'));
+  console.log(chalk.white('3. Copy Client ID and Client Secret'));
+  console.log(chalk.white('4. In "Generate Code", use scopes: ') + chalk.bold('ZohoMail.messages.READ,ZohoMail.accounts.READ'));
+  console.log(chalk.white('5. Copy the generated Authorization Code\n'));
 
   const answers = await inquirer.prompt([
     {
@@ -43,7 +45,7 @@ async function run() {
   const url = `https://accounts.zoho.${answers.dc}/oauth/v2/token`;
 
   try {
-    console.log('\nExchanging code for tokens...');
+    console.log(chalk.blue('\nExchanging code for tokens...'));
     
     const params = new URLSearchParams({
       code: answers.code,
@@ -58,17 +60,17 @@ async function run() {
       throw new Error(resp.data.error);
     }
 
-    console.log('\n✅ Success!');
-    console.log('-----------------------------------');
-    console.log(`Refresh Token: ${resp.data.refresh_token}`);
-    console.log('-----------------------------------');
-    console.log('\nUpdate your .env file with this token.');
-    console.log('Note: The refresh token does not expire unless you revoke it.');
+    console.log(chalk.green.bold('\n✅ Success!'));
+    console.log(chalk.gray('-----------------------------------'));
+    console.log(`${chalk.bold('Refresh Token:')} ${chalk.green(resp.data.refresh_token)}`);
+    console.log(chalk.gray('-----------------------------------'));
+    console.log(chalk.yellow('\nUpdate your .env file with this token.'));
+    console.log(chalk.gray('Note: The refresh token does not expire unless you revoke it.\n'));
 
   } catch (err: any) {
     const errorMsg = err.response?.data?.error || err.message;
-    console.error(`\n❌ Error: ${errorMsg}`);
-    console.log('Make sure your Authorization Code is still valid (they usually expire in a few minutes) and that your Client ID/Secret are correct.');
+    console.error(chalk.red.bold(`\n❌ Error: ${errorMsg}`));
+    console.log(chalk.yellow('Make sure your Authorization Code is still valid (they usually expire in a few minutes) and that your Client ID/Secret are correct.\n'));
   }
 }
 
