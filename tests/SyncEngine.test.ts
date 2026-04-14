@@ -97,4 +97,56 @@ describe('SyncEngine', () => {
     expect(destination.storeRawMessage).not.toHaveBeenCalled();
     expect(state.markSeen).not.toHaveBeenCalled();
   });
+
+  it('should filter messages by subject', async () => {
+    const msg1: MessageMetadata = {
+      id: 'msg1',
+      receivedAt: new Date('2023-01-01T00:00:00Z'),
+      subject: 'Newsletter: Weekly update',
+    };
+    const msg2: MessageMetadata = {
+      id: 'msg2',
+      receivedAt: new Date('2023-01-01T00:01:00Z'),
+      subject: 'Work email',
+    };
+
+    source.listCandidateMessages.mockResolvedValue([msg1, msg2]);
+    source.fetchRawMessage.mockResolvedValue(Buffer.from('raw content'));
+
+    await engine.run({
+      lookbackMinutes: 60,
+      maxMessages: 10,
+      concurrency: 1,
+      filter: { subjectContains: 'newsletter' },
+    });
+
+    expect(destination.storeRawMessage).toHaveBeenCalledTimes(1);
+    expect(destination.storeRawMessage).toHaveBeenCalledWith(
+      Buffer.from('raw content'),
+      msg1,
+      expect.anything()
+    );
+  });
+
+  it('should not store messages in dry-run mode', async () => {
+    const msg: MessageMetadata = {
+      id: 'msg1',
+      receivedAt: new Date('2023-01-01T00:00:00Z'),
+      subject: 'Test subject',
+    };
+
+    source.listCandidateMessages.mockResolvedValue([msg]);
+    source.fetchRawMessage.mockResolvedValue(Buffer.from('raw content'));
+
+    await engine.run({
+      lookbackMinutes: 60,
+      maxMessages: 10,
+      concurrency: 1,
+      dryRun: true,
+    });
+
+    expect(destination.storeRawMessage).not.toHaveBeenCalled();
+    expect(state.markSeen).not.toHaveBeenCalled();
+    expect(state.saveCheckpoint).not.toHaveBeenCalled();
+  });
 });

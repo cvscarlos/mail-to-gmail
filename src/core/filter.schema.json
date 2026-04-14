@@ -1,0 +1,12 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SyncFilter",
+  "type": "object",
+  "properties": {
+    "subjectContains": {
+      "type": "string",
+      "description": "Case-insensitive substring to filter messages by subject."
+    }
+  },
+  "additionalProperties": false
+}

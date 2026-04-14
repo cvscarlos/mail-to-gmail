@@ -56,6 +56,10 @@ export interface StateStore {
   markSeen(record: SyncRecord): Promise<void>;
 }
 
+export interface SyncFilter {
+  subjectContains?: string;
+}
+
 export interface SyncRecord {
   sourceProvider: string;
   sourceAccount: string;

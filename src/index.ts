@@ -8,6 +8,7 @@ import { GmailImapDestination } from './providers/destination/GmailImapDestinati
 import lockfile from 'proper-lockfile';
 import fs from 'fs';
 import path from 'path';
+import { SyncFilter } from './core/types.js';
 
 const program = new Command();
 
@@ -16,10 +17,13 @@ program.name('mail-bridge').description('One-way sync from Zoho to Gmail').versi
 program
   .command('sync')
   .description('Sync messages once')
-  .action(async () => {
+  .option('--dry-run', 'Run without storing messages in the destination')
+  .action(async (cmdOptions) => {
     const config = loadConfig();
     const logger = createLogger(config.APP_LOG_LEVEL);
     const state = new SqliteStateStore(config.STATE_DB_PATH);
+
+    const dryRun = cmdOptions.dryRun || config.DRY_RUN;
 
     const source = new ZohoMailApiSource({
       dc: config.ZOHO_DC,
@@ -35,6 +39,20 @@ program
     });
 
     const engine = new SyncEngine(source, destination, state, logger);
+
+    // Load filter if path is provided
+    let filter: SyncFilter | undefined;
+    const filterPath = config.FILTER_CONFIG_PATH;
+    if (filterPath && fs.existsSync(filterPath)) {
+      try {
+        const filterData = JSON.parse(fs.readFileSync(filterPath, 'utf-8'));
+        filter = filterData;
+        logger.info(`Loaded sync filter from ${filterPath}`);
+      } catch (err: any) {
+        logger.error(`Failed to load filter from ${filterPath}: ${err.message}`);
+        process.exit(1);
+      }
+    }
 
     const lockPath = path.resolve(config.STATE_DB_PATH + '.lock');
     if (!fs.existsSync(lockPath)) {
@@ -56,6 +74,8 @@ program
         concurrency: config.CONCURRENCY,
         sourceFolders: config.ZOHO_FOLDER_NAMES.split(','),
         targetMailbox: config.GMAIL_TARGET_MAILBOX,
+        dryRun,
+        filter,
       });
     } catch (err: any) {
       logger.error(`Sync failed: ${err.message}`);

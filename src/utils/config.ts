@@ -21,6 +21,9 @@ const configSchema = z.object({
   SYNC_LOOKBACK_MINUTES: z.coerce.number().default(1440), // 1 day
   MAX_MESSAGES_PER_RUN: z.coerce.number().default(100),
   CONCURRENCY: z.coerce.number().default(5),
+
+  DRY_RUN: z.preprocess((val) => val === 'true' || val === true, z.boolean()).default(false),
+  FILTER_CONFIG_PATH: z.string().optional(),
 });
 
 export type Config = z.infer<typeof configSchema>;

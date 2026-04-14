@@ -1,6 +1,13 @@
 import crypto from 'crypto';
 import pRetry from 'p-retry';
-import { SourceProvider, DestinationProvider, StateStore, Logger, SyncRecord } from './types.js';
+import {
+  SourceProvider,
+  DestinationProvider,
+  StateStore,
+  Logger,
+  SyncRecord,
+  SyncFilter,
+} from './types.js';
 
 export interface SyncOptions {
   lookbackMinutes: number;
@@ -8,6 +15,8 @@ export interface SyncOptions {
   concurrency: number;
   sourceFolders?: string[];
   targetMailbox?: string;
+  dryRun?: boolean;
+  filter?: SyncFilter;
 }
 
 export class SyncEngine {
@@ -19,49 +28,63 @@ export class SyncEngine {
   ) {}
 
   async run(options: SyncOptions): Promise<void> {
-    this.logger.info(`Starting sync run: ${this.source.name} -> ${this.destination.name}`);
+    const mode = options.dryRun ? '[DRY RUN] ' : '';
+    this.logger.info(`${mode}Starting sync run: ${this.source.name} -> ${this.destination.name}`);
 
     await this.source.connect();
-    await this.destination.connect();
-    await this.destination.ensureReady();
+    if (!options.dryRun) {
+      await this.destination.connect();
+      await this.destination.ensureReady();
+    }
 
     const accountId = await this.source.getAccountId();
     const checkpoint = await this.state.loadCheckpoint(this.source.name, accountId);
 
-    this.logger.info(`Loaded checkpoint for ${accountId}: ${JSON.stringify(checkpoint)}`);
+    this.logger.info(`${mode}Loaded checkpoint for ${accountId}: ${JSON.stringify(checkpoint)}`);
 
     const candidates = await this.source.listCandidateMessages(checkpoint, {
       folders: options.sourceFolders,
     });
-    this.logger.info(`Found ${candidates.length} candidate messages`);
+    this.logger.info(`${mode}Found ${candidates.length} candidate messages`);
 
     let processedCount = 0;
     let successCount = 0;
     let skipCount = 0;
+    let filterCount = 0;
     let errorCount = 0;
 
-    let latestCheckpoint = { ...checkpoint };
+    const latestCheckpoint = { ...checkpoint };
 
     for (const msg of candidates) {
       if (processedCount >= options.maxMessages) {
-        this.logger.info(`Reached max messages limit (${options.maxMessages})`);
+        this.logger.info(`${mode}Reached max messages limit (${options.maxMessages})`);
         break;
       }
 
       processedCount++;
 
       try {
+        // Filter by subject if specified
+        if (options.filter?.subjectContains && msg.subject) {
+          const filterTerm = options.filter.subjectContains.toLowerCase();
+          if (!msg.subject.toLowerCase().includes(filterTerm)) {
+            filterCount++;
+            this.logger.debug(`${mode}Message filtered out by subject: ${msg.subject}`);
+            continue;
+          }
+        }
+
         const alreadySeen = await this.state.hasSeen(this.source.name, accountId, msg.id);
         if (alreadySeen) {
           skipCount++;
-          this.logger.debug(`Skipping already seen message: ${msg.id}`);
+          this.logger.debug(`${mode}Skipping already seen message: ${msg.id}`);
           continue;
         }
 
         await pRetry(
           async () => {
             this.logger.info(
-              `Processing message [${processedCount}/${candidates.length}]: ${msg.id} - ${msg.subject}`
+              `${mode}Processing message [${processedCount}/${candidates.length}]: ${msg.id} - ${msg.subject}`
             );
 
             const rawMime = await this.source.fetchRawMessage({ id: msg.id, accountId });
@@ -74,27 +97,32 @@ export class SyncEngine {
               contentHash
             );
             if (hashSeen) {
-              this.logger.info(`Message content already seen by hash: ${msg.id}`);
+              this.logger.info(`${mode}Message content already seen by hash: ${msg.id}`);
               skipCount++;
               return;
             }
 
-            await this.destination.storeRawMessage(rawMime, msg, {
-              targetMailbox: options.targetMailbox,
-            });
+            if (options.dryRun) {
+              this.logger.info(`[DRY RUN] Would have stored message: ${msg.subject}`);
+            } else {
+              await this.destination.storeRawMessage(rawMime, msg, {
+                targetMailbox: options.targetMailbox,
+              });
 
-            const record: SyncRecord = {
-              sourceProvider: this.source.name,
-              sourceAccount: accountId,
-              sourceMessageId: msg.id,
-              receivedAt: msg.receivedAt,
-              contentHash,
-              importTimestamp: new Date(),
-              destinationProvider: this.destination.name,
-              destinationMailbox: options.targetMailbox || 'INBOX',
-            };
+              const record: SyncRecord = {
+                sourceProvider: this.source.name,
+                sourceAccount: accountId,
+                sourceMessageId: msg.id,
+                receivedAt: msg.receivedAt,
+                contentHash,
+                importTimestamp: new Date(),
+                destinationProvider: this.destination.name,
+                destinationMailbox: options.targetMailbox || 'INBOX',
+              };
 
-            await this.state.markSeen(record);
+              await this.state.markSeen(record);
+            }
+
             successCount++;
 
             // Update checkpoint trackers
@@ -107,30 +135,32 @@ export class SyncEngine {
             }
           },
           {
-            retries: 3,
+            retries: options.dryRun ? 0 : 3,
             onFailedAttempt: (err) => {
               this.logger.warn(
-                `Attempt ${err.attemptNumber} failed for message ${msg.id}: ${err.error.message}`
+                `${mode}Attempt ${err.attemptNumber} failed for message ${msg.id}: ${err.error.message}`
               );
             },
           }
         );
       } catch (err: any) {
-        this.logger.error(`Failed to sync message ${msg.id}: ${err.message}`);
+        this.logger.error(`${mode}Failed to sync message ${msg.id}: ${err.message}`);
         errorCount++;
       }
     }
 
-    if (latestCheckpoint.lastReceivedAt !== checkpoint.lastReceivedAt) {
+    if (!options.dryRun && latestCheckpoint.lastReceivedAt !== checkpoint.lastReceivedAt) {
       await this.state.saveCheckpoint(this.source.name, accountId, latestCheckpoint);
-      this.logger.info(`Saved new checkpoint: ${JSON.stringify(latestCheckpoint)}`);
+      this.logger.info(`${mode}Saved new checkpoint: ${JSON.stringify(latestCheckpoint)}`);
     }
 
     this.logger.info(
-      `Sync completed: ${successCount} success, ${skipCount} skipped, ${errorCount} errors`
+      `${mode}Sync completed: ${successCount} success, ${skipCount} skipped, ${filterCount} filtered, ${errorCount} errors`
     );
 
     await this.source.disconnect();
-    await this.destination.disconnect();
+    if (!options.dryRun) {
+      await this.destination.disconnect();
+    }
   }
 }
