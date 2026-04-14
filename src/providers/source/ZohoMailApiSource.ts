@@ -49,7 +49,7 @@ export class ZohoMailApiSource implements SourceProvider {
 
     const resp = await axios.post(this.getRefreshTokenUrl(), params);
     this.accessToken = resp.data.access_token;
-    
+
     this.http.defaults.headers.common['Authorization'] = `Zoho-oauthtoken ${this.accessToken}`;
   }
 
@@ -67,15 +67,18 @@ export class ZohoMailApiSource implements SourceProvider {
     return this.accountId!;
   }
 
-  async listCandidateMessages(checkpoint: SyncCheckpoint, options?: { folders?: string[] }): Promise<MessageMetadata[]> {
+  async listCandidateMessages(
+    checkpoint: SyncCheckpoint,
+    options?: { folders?: string[] }
+  ): Promise<MessageMetadata[]> {
     const accountId = await this.getAccountId();
-    
+
     // For v1, we only list from Inbox if folders are not specified
     const folderNames = options?.folders || ['Inbox'];
     const folders = await this.getFolders(accountId);
-    
-    const targetFolders = folders.filter(f => folderNames.includes(f.folderName));
-    
+
+    const targetFolders = folders.filter((f) => folderNames.includes(f.folderName));
+
     let allMessages: MessageMetadata[] = [];
 
     for (const folder of targetFolders) {
@@ -84,31 +87,33 @@ export class ZohoMailApiSource implements SourceProvider {
         folderid: folder.folderId,
         limit: 100,
       };
-      
+
       if (checkpoint.lastReceivedAt) {
-        // Zoho API doesn't have a direct "since" param in this endpoint, 
+        // Zoho API doesn't have a direct "since" param in this endpoint,
         // we fetch recent and filter locally or use search.
         // Viewing messages is usually enough for idempotent runs.
       }
 
       const resp = await this.http.get(url, { params });
       const messages = resp.data.data || [];
-      
-      allMessages = allMessages.concat(messages.map((m: any) => ({
-        id: m.messageId,
-        receivedAt: new Date(parseInt(m.receivedTime)),
-        subject: m.subject,
-        from: m.sender,
-        folderId: folder.folderId,
-        folderName: folder.folderName,
-        rawSize: parseInt(m.size),
-      })));
+
+      allMessages = allMessages.concat(
+        messages.map((m: any) => ({
+          id: m.messageId,
+          receivedAt: new Date(parseInt(m.receivedTime)),
+          subject: m.subject,
+          from: m.sender,
+          folderId: folder.folderId,
+          folderName: folder.folderName,
+          rawSize: parseInt(m.size),
+        }))
+      );
     }
 
     // Filter by checkpoint if available
     if (checkpoint.lastReceivedAt) {
       const since = new Date(checkpoint.lastReceivedAt);
-      allMessages = allMessages.filter(m => m.receivedAt >= since);
+      allMessages = allMessages.filter((m) => m.receivedAt >= since);
     }
 
     // Sort by receivedAt ascending for deterministic processing
@@ -116,7 +121,9 @@ export class ZohoMailApiSource implements SourceProvider {
   }
 
   private async getFolders(accountId: string): Promise<any[]> {
-    const resp = await this.http.get(`https://mail.zoho.${this.config.dc}/api/accounts/${accountId}/folders`);
+    const resp = await this.http.get(
+      `https://mail.zoho.${this.config.dc}/api/accounts/${accountId}/folders`
+    );
     return resp.data.data || [];
   }
 

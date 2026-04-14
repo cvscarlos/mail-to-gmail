@@ -36,7 +36,10 @@ export class SqliteStateStore implements StateStore {
   }
 
   async loadCheckpoint(provider: string, account: string): Promise<SyncCheckpoint> {
-    const row = this.db.prepare('SELECT last_received_at, last_message_id FROM checkpoints WHERE provider = ? AND account = ?')
+    const row = this.db
+      .prepare(
+        'SELECT last_received_at, last_message_id FROM checkpoints WHERE provider = ? AND account = ?'
+      )
       .get(provider, account) as any;
 
     if (!row) return {};
@@ -47,24 +50,39 @@ export class SqliteStateStore implements StateStore {
     };
   }
 
-  async saveCheckpoint(provider: string, account: string, checkpoint: SyncCheckpoint): Promise<void> {
-    this.db.prepare(`
+  async saveCheckpoint(
+    provider: string,
+    account: string,
+    checkpoint: SyncCheckpoint
+  ): Promise<void> {
+    this.db
+      .prepare(
+        `
       INSERT INTO checkpoints (provider, account, last_received_at, last_message_id)
       VALUES (?, ?, ?, ?)
       ON CONFLICT(provider, account) DO UPDATE SET
         last_received_at = excluded.last_received_at,
         last_message_id = excluded.last_message_id
-    `).run(provider, account, checkpoint.lastReceivedAt, checkpoint.lastMessageId);
+    `
+      )
+      .run(provider, account, checkpoint.lastReceivedAt, checkpoint.lastMessageId);
   }
 
-  async hasSeen(provider: string, account: string, messageId: string, contentHash?: string): Promise<boolean> {
-    const byId = this.db.prepare('SELECT 1 FROM seen_messages WHERE provider = ? AND account = ? AND message_id = ?')
+  async hasSeen(
+    provider: string,
+    account: string,
+    messageId: string,
+    contentHash?: string
+  ): Promise<boolean> {
+    const byId = this.db
+      .prepare('SELECT 1 FROM seen_messages WHERE provider = ? AND account = ? AND message_id = ?')
       .get(provider, account, messageId);
 
     if (byId) return true;
 
     if (contentHash) {
-      const byHash = this.db.prepare('SELECT 1 FROM seen_messages WHERE content_hash = ?')
+      const byHash = this.db
+        .prepare('SELECT 1 FROM seen_messages WHERE content_hash = ?')
         .get(contentHash);
       if (byHash) return true;
     }
@@ -73,20 +91,24 @@ export class SqliteStateStore implements StateStore {
   }
 
   async markSeen(record: SyncRecord): Promise<void> {
-    this.db.prepare(`
+    this.db
+      .prepare(
+        `
       INSERT OR IGNORE INTO seen_messages (
         provider, account, message_id, content_hash, received_at,
         import_timestamp, dest_provider, dest_mailbox
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      record.sourceProvider,
-      record.sourceAccount,
-      record.sourceMessageId,
-      record.contentHash,
-      record.receivedAt.toISOString(),
-      record.importTimestamp.toISOString(),
-      record.destinationProvider,
-      record.destinationMailbox
-    );
+    `
+      )
+      .run(
+        record.sourceProvider,
+        record.sourceAccount,
+        record.sourceMessageId,
+        record.contentHash,
+        record.receivedAt.toISOString(),
+        record.importTimestamp.toISOString(),
+        record.destinationProvider,
+        record.destinationMailbox
+      );
   }
 }

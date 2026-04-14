@@ -24,7 +24,10 @@ export interface SourceProvider {
   name: string;
   connect(): Promise<void>;
   disconnect(): Promise<void>;
-  listCandidateMessages(checkpoint: SyncCheckpoint, options?: { folders?: string[] }): Promise<MessageMetadata[]>;
+  listCandidateMessages(
+    checkpoint: SyncCheckpoint,
+    options?: { folders?: string[] }
+  ): Promise<MessageMetadata[]>;
   fetchRawMessage(messageRef: MessageRef): Promise<Buffer>;
   getAccountId(): Promise<string>;
 }
@@ -34,13 +37,22 @@ export interface DestinationProvider {
   connect(): Promise<void>;
   disconnect(): Promise<void>;
   ensureReady(): Promise<void>;
-  storeRawMessage(rawMime: Buffer, metadata: MessageMetadata, options?: { targetMailbox?: string }): Promise<void>;
+  storeRawMessage(
+    rawMime: Buffer,
+    metadata: MessageMetadata,
+    options?: { targetMailbox?: string }
+  ): Promise<void>;
 }
 
 export interface StateStore {
   loadCheckpoint(provider: string, account: string): Promise<SyncCheckpoint>;
   saveCheckpoint(provider: string, account: string, checkpoint: SyncCheckpoint): Promise<void>;
-  hasSeen(provider: string, account: string, messageId: string, contentHash?: string): Promise<boolean>;
+  hasSeen(
+    provider: string,
+    account: string,
+    messageId: string,
+    contentHash?: string
+  ): Promise<boolean>;
   markSeen(record: SyncRecord): Promise<void>;
 }
 

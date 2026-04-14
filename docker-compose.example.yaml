@@ -7,4 +7,4 @@ services:
       - .env
     environment:
       - STATE_DB_PATH=/app/data/mail-bridge.db
-    restart: "no" # Run via external scheduler/cron
+    restart: 'no' # Run via external scheduler/cron

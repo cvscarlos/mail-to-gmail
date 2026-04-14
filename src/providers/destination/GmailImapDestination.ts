@@ -39,9 +39,13 @@ export class GmailImapDestination implements DestinationProvider {
     await this.client.list();
   }
 
-  async storeRawMessage(rawMime: Buffer, metadata: MessageMetadata, options?: { targetMailbox?: string }): Promise<void> {
+  async storeRawMessage(
+    rawMime: Buffer,
+    metadata: MessageMetadata,
+    options?: { targetMailbox?: string }
+  ): Promise<void> {
     const mailbox = options?.targetMailbox || 'INBOX';
-    
+
     await this.client.append(mailbox, rawMime, [], metadata.receivedAt);
   }
 }

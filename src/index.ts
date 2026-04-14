@@ -11,12 +11,10 @@ import path from 'path';
 
 const program = new Command();
 
-program
-  .name('mail-bridge')
-  .description('One-way sync from Zoho to Gmail')
-  .version('1.0.0');
+program.name('mail-bridge').description('One-way sync from Zoho to Gmail').version('1.0.0');
 
-program.command('sync')
+program
+  .command('sync')
   .description('Sync messages once')
   .action(async () => {
     const config = loadConfig();
@@ -46,7 +44,7 @@ program.command('sync')
     let release;
     try {
       release = await lockfile.lock(lockPath, { retries: 0 });
-    } catch (err) {
+    } catch (_err) {
       logger.error('Another sync process is already running.');
       process.exit(1);
     }
@@ -67,7 +65,8 @@ program.command('sync')
     }
   });
 
-program.command('test-source')
+program
+  .command('test-source')
   .description('Test Zoho source connection')
   .action(async () => {
     const config = loadConfig();
@@ -90,7 +89,8 @@ program.command('test-source')
     }
   });
 
-program.command('test-destination')
+program
+  .command('test-destination')
   .description('Test Gmail destination connection')
   .action(async () => {
     const config = loadConfig();

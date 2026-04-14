@@ -4,13 +4,18 @@ import chalk from 'chalk';
 
 async function run() {
   console.log(chalk.bold.blue('\n--- Zoho OAuth Setup Wizard ---\n'));
-  console.log(chalk.cyan('This tool will help you get a Refresh Token for your Zoho Mail Bridge.\n'));
-  
+  console.log(
+    chalk.cyan('This tool will help you get a Refresh Token for your Zoho Mail Bridge.\n')
+  );
+
   console.log(chalk.yellow('Prerequisites:'));
   console.log(chalk.white('1. Go to ') + chalk.underline('https://api-console.zoho.com/'));
   console.log(chalk.white('2. Create a "Self Client"'));
   console.log(chalk.white('3. Copy Client ID and Client Secret'));
-  console.log(chalk.white('4. In "Generate Code", use scopes: ') + chalk.bold('ZohoMail.messages.READ,ZohoMail.accounts.READ'));
+  console.log(
+    chalk.white('4. In "Generate Code", use scopes: ') +
+      chalk.bold('ZohoMail.messages.READ,ZohoMail.accounts.READ')
+  );
   console.log(chalk.white('5. Copy the generated Authorization Code\n'));
 
   const answers = await inquirer.prompt([
@@ -46,7 +51,7 @@ async function run() {
 
   try {
     console.log(chalk.blue('\nExchanging code for tokens...'));
-    
+
     const params = new URLSearchParams({
       code: answers.code,
       client_id: answers.clientId,
@@ -66,11 +71,14 @@ async function run() {
     console.log(chalk.gray('-----------------------------------'));
     console.log(chalk.yellow('\nUpdate your .env file with this token.'));
     console.log(chalk.gray('Note: The refresh token does not expire unless you revoke it.\n'));
-
   } catch (err: any) {
     const errorMsg = err.response?.data?.error || err.message;
     console.error(chalk.red.bold(`\n❌ Error: ${errorMsg}`));
-    console.log(chalk.yellow('Make sure your Authorization Code is still valid (they usually expire in a few minutes) and that your Client ID/Secret are correct.\n'));
+    console.log(
+      chalk.yellow(
+        'Make sure your Authorization Code is still valid (they usually expire in a few minutes) and that your Client ID/Secret are correct.\n'
+      )
+    );
   }
 }
 

@@ -1,12 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SyncEngine } from '../src/core/SyncEngine.js';
-import { 
-  SourceProvider, 
-  DestinationProvider, 
-  StateStore, 
-  Logger, 
-  SyncCheckpoint,
-  MessageMetadata
+import {
+  SourceProvider,
+  DestinationProvider,
+  StateStore,
+  Logger,
+  MessageMetadata,
 } from '../src/core/types.js';
 
 describe('SyncEngine', () => {
