@@ -2,6 +2,9 @@
   "name": "mail-bridge",
   "version": "1.0.0",
   "description": "Production-quality email sync tool (Zoho -> Gmail)",
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
