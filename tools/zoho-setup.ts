@@ -20,6 +20,7 @@ async function run() {
 
   // Load existing env values if they exist
   let envDefaults: any = {};
+  let maskedSecret = '';
   if (fs.existsSync('.env')) {
     try {
       const envConfig = dotenv.parse(fs.readFileSync('.env'));
@@ -28,6 +29,12 @@ async function run() {
         clientId: envConfig.ZOHO_CLIENT_ID,
         clientSecret: envConfig.ZOHO_CLIENT_SECRET,
       };
+
+      if (envDefaults.clientSecret) {
+        const secret = envDefaults.clientSecret;
+        maskedSecret =
+          secret.length > 6 ? `${secret.substring(0, 6)}...***` : '*** (already set)';
+      }
     } catch (err) {
       // Ignore errors reading existing env
     }
@@ -54,7 +61,7 @@ async function run() {
         type: 'password',
         name: 'clientSecret',
         message: envDefaults.clientSecret
-          ? 'Enter your Client Secret (leave blank to keep existing):'
+          ? `Enter your Client Secret (blank to keep: ${chalk.cyan(maskedSecret)}):`
           : 'Enter your Client Secret:',
         mask: '*',
         validate: (input) => {
