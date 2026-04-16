@@ -11,31 +11,34 @@ const GMAIL_IMAP_PORT = 993;
 
 export class GmailImapDestination implements DestinationProvider {
   public name = 'gmail-imap';
-  private client: ImapFlow;
+  private client?: ImapFlow;
 
-  constructor(private config: GmailConfig) {
+  constructor(private config: GmailConfig) {}
+
+  async connect(): Promise<void> {
+    // ImapFlow instances are single-use (no reconnect after logout), so build a fresh one each run.
     this.client = new ImapFlow({
       host: GMAIL_IMAP_HOST,
       port: GMAIL_IMAP_PORT,
       secure: true,
-      auth: {
-        user: config.email,
-        pass: config.appPassword,
-      },
+      auth: { user: this.config.email, pass: this.config.appPassword },
       logger: false,
     });
-  }
-
-  async connect(): Promise<void> {
     await this.client.connect();
   }
 
   async disconnect(): Promise<void> {
-    await this.client.logout();
+    if (!this.client) return;
+    try {
+      await this.client.logout();
+    } catch {
+      // swallow: remote may have already closed the socket
+    }
+    this.client = undefined;
   }
 
   async ensureReady(): Promise<void> {
-    // Check connection by listing mailboxes
+    if (!this.client) throw new Error('GmailImapDestination: connect() must be called first');
     await this.client.list();
   }
 
@@ -44,8 +47,8 @@ export class GmailImapDestination implements DestinationProvider {
     metadata: MessageMetadata,
     options?: { targetMailbox?: string }
   ): Promise<void> {
+    if (!this.client) throw new Error('GmailImapDestination: connect() must be called first');
     const mailbox = options?.targetMailbox || 'INBOX';
-
     await this.client.append(mailbox, rawMime, [], metadata.receivedAt);
   }
 }

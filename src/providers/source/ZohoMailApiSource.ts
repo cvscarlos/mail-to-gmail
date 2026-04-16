@@ -9,15 +9,33 @@ export interface ZohoConfig {
   accountId?: string;
 }
 
+const TOKEN_REFRESH_SAFETY_MS = 60_000; // refresh a minute before expiry
+
 export class ZohoMailApiSource implements SourceProvider {
   public name = 'zoho';
   private http: AxiosInstance;
   private accessToken?: string;
+  private tokenExpiresAt = 0;
   private accountId?: string;
 
   constructor(private config: ZohoConfig) {
-    this.http = axios.create();
+    this.http = axios.create({ timeout: 30_000 });
     this.accountId = config.accountId;
+
+    // Auto-refresh on 401 once per request
+    this.http.interceptors.response.use(
+      (r) => r,
+      async (err) => {
+        const cfg = err.config;
+        if (err.response?.status === 401 && cfg && !cfg._retried) {
+          cfg._retried = true;
+          await this.refreshAccessToken();
+          cfg.headers = { ...cfg.headers, Authorization: `Zoho-oauthtoken ${this.accessToken}` };
+          return this.http.request(cfg);
+        }
+        return Promise.reject(err);
+      }
+    );
   }
 
   private getAccountsUrl() {
@@ -29,14 +47,16 @@ export class ZohoMailApiSource implements SourceProvider {
   }
 
   async connect(): Promise<void> {
-    await this.refreshAccessToken();
-    if (!this.accountId) {
-      this.accountId = await this.discoverAccountId();
-    }
+    if (!this.isTokenValid()) await this.refreshAccessToken();
+    if (!this.accountId) this.accountId = await this.discoverAccountId();
   }
 
   async disconnect(): Promise<void> {
-    // No explicit disconnect needed for HTTP
+    // No explicit disconnect needed for HTTP; token is retained for the next run.
+  }
+
+  private isTokenValid(): boolean {
+    return !!this.accessToken && this.tokenExpiresAt > Date.now() + TOKEN_REFRESH_SAFETY_MS;
   }
 
   private async refreshAccessToken(): Promise<void> {
@@ -47,8 +67,10 @@ export class ZohoMailApiSource implements SourceProvider {
       grant_type: 'refresh_token',
     });
 
-    const resp = await axios.post(this.getRefreshTokenUrl(), params);
+    const resp = await axios.post(this.getRefreshTokenUrl(), params, { timeout: 30_000 });
     this.accessToken = resp.data.access_token;
+    const expiresIn = Number(resp.data.expires_in) || 3600;
+    this.tokenExpiresAt = Date.now() + expiresIn * 1000;
 
     this.http.defaults.headers.common['Authorization'] = `Zoho-oauthtoken ${this.accessToken}`;
   }

@@ -20,6 +20,7 @@ const configSchema = z.object({
   SYNC_LOOKBACK_DAYS: z.coerce.number().default(1),
   MAX_MESSAGES_PER_RUN: z.coerce.number().default(100),
   CONCURRENCY: z.coerce.number().default(5),
+  SYNC_INTERVAL_SECONDS: z.coerce.number().int().nonnegative().default(300),
 
   DRY_RUN: z.preprocess((val) => val === 'true' || val === true, z.boolean()).default(false),
   FILTER_CONFIG_PATH: z.string().optional(),
