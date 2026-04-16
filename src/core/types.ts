@@ -26,7 +26,7 @@ export interface SourceProvider {
   disconnect(): Promise<void>;
   listCandidateMessages(
     checkpoint: SyncCheckpoint,
-    options?: { folders?: string[]; limit?: number }
+    options?: { folders?: string[]; excludeFolders?: string[]; limit?: number }
   ): Promise<MessageMetadata[]>;
   fetchRawMessage(messageRef: MessageRef): Promise<Buffer>;
   getAccountId(): Promise<string>;

@@ -14,6 +14,7 @@ export interface SyncOptions {
   maxMessages: number;
   concurrency: number;
   sourceFolders?: string[];
+  excludeFolders?: string[];
   targetMailbox?: string;
   dryRun?: boolean;
   filter?: SyncFilter;
@@ -54,7 +55,7 @@ export class SyncEngine {
 
     const candidates = await this.source.listCandidateMessages(checkpoint, {
       folders: options.sourceFolders,
-      limit: options.maxMessages,
+      excludeFolders: options.excludeFolders,
     });
     this.logger.info(`${mode}Found ${candidates.length} candidate messages`);
 

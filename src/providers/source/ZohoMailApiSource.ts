@@ -78,70 +78,50 @@ export class ZohoMailApiSource implements SourceProvider {
 
   async listCandidateMessages(
     checkpoint: SyncCheckpoint,
-    options?: { folders?: string[]; limit?: number }
+    options?: { folders?: string[]; excludeFolders?: string[]; limit?: number }
   ): Promise<MessageMetadata[]> {
     const accountId = await this.getAccountId();
 
-    // For v1, we only list from Inbox if folders are not specified
-    const folderNames = options?.folders || ['Inbox'];
     const folders = await this.getFolders(accountId);
+    const defaultExcludes = new Set(['Spam', 'Trash']);
+    const folderFilter = options?.folders;
+    const excludeNames = new Set(options?.excludeFolders ?? [...defaultExcludes]);
+    const targetFolders = folders.filter(
+      (f) =>
+        (folderFilter === undefined || folderFilter.includes(f.folderName)) &&
+        !excludeNames.has(f.folderName)
+    );
 
-    const targetFolders = folders.filter((f) => folderNames.includes(f.folderName));
-
-    let allMessages: MessageMetadata[] = [];
+    const since = checkpoint.lastReceivedAt ? new Date(checkpoint.lastReceivedAt) : undefined;
+    const hardCap = options?.limit;
+    const allMessages: MessageMetadata[] = [];
 
     for (const folder of targetFolders) {
       const url = `https://mail.zoho.${this.config.dc}/api/accounts/${accountId}/messages/view`;
-
+      const limitPerPage = 200; // Zoho's documented max per page
       let start = 1;
-      // Zoho doc max is 200
-      const limitPerPage = Math.min(options?.limit || 200, 200);
-      let hasMore = true;
-
       let iterations = 0;
-      while (hasMore && allMessages.length < (options?.limit || Infinity)) {
-        iterations++;
-        if (iterations > 1000) {
+      let reachedCheckpoint = false;
+
+      while (!reachedCheckpoint) {
+        if (++iterations > 1000) {
           throw new Error('Circuit breaker triggered: Too many pagination requests to Zoho');
         }
 
         const params: any = {
           folderId: folder.folderId,
-          start: start,
+          start,
           limit: limitPerPage,
           sortBy: 'date',
-          sortorder: 'false', // descending
+          sortorder: 'false', // descending: newest first, so we can early-stop at checkpoint
           status: 'all',
           threadedMails: 'false',
         };
 
+        let messages: any[];
         try {
           const resp = await this.http.get(url, { params });
-          const messages = resp.data.data || [];
-
-          if (!Array.isArray(messages) || messages.length === 0) {
-            hasMore = false;
-            break;
-          }
-
-          allMessages = allMessages.concat(
-            messages.map((m: any) => ({
-              id: m.messageId,
-              receivedAt: new Date(parseInt(m.receivedTime || m.receivedtime)),
-              subject: m.subject,
-              from: m.sender,
-              folderId: folder.folderId,
-              folderName: folder.folderName,
-              rawSize: parseInt(m.size),
-            }))
-          );
-
-          start += messages.length;
-
-          // Stop if we fetched less than we asked for, meaning we hit the end of the folder
-          if (messages.length < limitPerPage) {
-            hasMore = false;
-          }
+          messages = resp.data.data || [];
         } catch (err: any) {
           if (err.response) {
             throw new Error(
@@ -150,16 +130,35 @@ export class ZohoMailApiSource implements SourceProvider {
           }
           throw err;
         }
+
+        if (!Array.isArray(messages) || messages.length === 0) break;
+
+        for (const m of messages) {
+          const receivedAt = new Date(parseInt(m.receivedTime || m.receivedtime));
+          if (since && receivedAt < since) {
+            reachedCheckpoint = true;
+            break;
+          }
+          allMessages.push({
+            id: m.messageId,
+            receivedAt,
+            subject: m.subject,
+            from: m.sender,
+            folderId: folder.folderId,
+            folderName: folder.folderName,
+            rawSize: parseInt(m.size),
+          });
+          if (hardCap !== undefined && allMessages.length >= hardCap) {
+            reachedCheckpoint = true;
+            break;
+          }
+        }
+
+        if (messages.length < limitPerPage) break; // reached end of folder
+        start += messages.length;
       }
     }
 
-    // Filter by checkpoint if available
-    if (checkpoint.lastReceivedAt) {
-      const since = new Date(checkpoint.lastReceivedAt);
-      allMessages = allMessages.filter((m) => m.receivedAt >= since);
-    }
-
-    // Sort by receivedAt ascending for deterministic processing
     return allMessages.sort((a, b) => a.receivedAt.getTime() - b.receivedAt.getTime());
   }
 

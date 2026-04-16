@@ -72,7 +72,6 @@ program
         lookbackDays: config.SYNC_LOOKBACK_DAYS,
         maxMessages: config.MAX_MESSAGES_PER_RUN,
         concurrency: config.CONCURRENCY,
-        sourceFolders: config.ZOHO_FOLDER_NAMES.split(','),
         targetMailbox: config.GMAIL_TARGET_MAILBOX,
         dryRun,
         filter,

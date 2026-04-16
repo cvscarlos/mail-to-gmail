@@ -12,7 +12,6 @@ const configSchema = z.object({
   ZOHO_CLIENT_SECRET: z.string(),
   ZOHO_REFRESH_TOKEN: z.string(),
   ZOHO_ACCOUNT_ID: z.string().optional(),
-  ZOHO_FOLDER_NAMES: z.string().default('Inbox'),
 
   GMAIL_EMAIL: z.string().email(),
   GMAIL_APP_PASSWORD: z.string(),
