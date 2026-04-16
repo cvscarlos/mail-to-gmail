@@ -12,7 +12,7 @@ import { SyncFilter } from './core/types.js';
 
 const program = new Command();
 
-program.name('mail-bridge').description('One-way sync from Zoho to Gmail').version('1.0.0');
+program.name('zoho-to-gmail').description('One-way sync from Zoho Mail to Gmail').version('1.0.0');
 
 const MAX_BACKOFF_MS = 30 * 60 * 1000; // 30 min ceiling on failure backoff
 

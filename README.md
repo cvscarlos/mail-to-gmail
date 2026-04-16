@@ -1,64 +1,71 @@
-# mail-bridge
+# zoho-to-gmail
 
-A production-quality, extensible one-way email sync tool that copies messages from Zoho Mail to Gmail.
+**Zoho Mail → Gmail, on autopilot. Works on the Zoho Free plan — no IMAP, no POP, no paid upgrade required.**
 
-## Why mail-bridge?
+On Zoho's Forever Free plan, IMAP and POP are disabled, so every "just forward everything to Gmail" tutorial dies on page one. Upgrading just to unlock mail forwarding costs real money per mailbox. `zoho-to-gmail` sidesteps the whole trap: it pulls from Zoho's official REST API (OAuth 2.0 — which **is** available on the free plan) and appends straight into your Gmail mailbox over IMAP with an App Password. Point it at a spare mini-PC, a Raspberry Pi, or a free-tier VPS and your Zoho inbox lands in Gmail every few minutes — forever, at zero Zoho cost.
 
-Zoho Mail's free tier often restricts POP/IMAP access. `mail-bridge` uses the Zoho Mail REST API (via OAuth 2.0) to fetch messages and appends them directly to your Gmail mailbox via IMAP with an App Password. This ensures reliable sync without forwarding or POP/IMAP on the source side.
+## Why you want this
 
-## Features
+- **Works on Zoho Free — no paid plan, no IMAP, no POP.** Uses only REST + OAuth, which free-plan accounts already have.
+- **Unifies your inboxes.** Read, search, and reply from a single Gmail account while Zoho keeps receiving.
+- **Idempotent and crash-safe.** Source message IDs plus SHA-256 content hashes mean you can stop, restart, or reconfigure anytime — Gmail never sees a duplicate.
+- **Preserves the full message.** Headers, threading, attachments, and encoding pass through untouched.
+- **All folders out of the box.** Archive, custom labels, server-side-filtered folders — everything except Spam and Trash, fully configurable.
+- **Extensible.** Provider interfaces are cleanly isolated. Swapping Zoho for Outlook or Gmail for generic IMAP is a one-file change.
 
-- **One-Way Sync:** Zoho -> Gmail.
-- **Idempotent:** Safe to run every 5 minutes.
-- **Deduplication:** Uses source message IDs and content hashes.
-- **MIME Preservation:** Copies original raw email content.
-- **Extensible:** Architecture allows adding new source/destination providers easily.
+## Ready to use today
 
-## Setup Guide
+- Long-running daemon by default: sync, sleep, repeat. `SIGTERM`-aware so it plays nicely with Docker.
+- Single env flag flips it to one-shot mode for cron or CI.
+- Optional subject filter for "only sync tickets matching X" workflows.
+- One SQLite file for checkpoints and dedup history. No Redis, no queue, no external infra.
+- Typical footprint: under 100 MB RAM and near-zero CPU while idle.
 
-### 1. Zoho OAuth Setup
-
-1. Go to the [Zoho API Console](https://api-console.zoho.com/).
-2. Create a **Self Client**.
-3. Copy the **Client ID** and **Client Secret**.
-4. In the "Generate Code" tab, use the scope `ZohoMail.messages.READ,ZohoMail.accounts.READ,ZohoMail.folders.READ`.
-5. Exchange the generated code for a **Refresh Token** using the included wizard:
-   ```bash
-   npm run setup:zoho
-   ```
-
-### 2. Gmail Setup
-
-1. Enable **IMAP** in your Gmail settings.
-2. Create an **App Password** in your Google Account security settings.
-
-### 3. Configuration
-
-Copy `.env.example` to `.env` and fill in your credentials.
+## Quick start
 
 ```bash
-cp .env.example .env
+nvm use && npm install
+npm run setup:zoho            # interactive OAuth wizard: client ID, secret, auth code
+cp .env.example .env          # fill in Gmail App Password and confirm defaults
+npm start sync                # starts the daemon
 ```
 
-### 4. Running the Sync
+First run pulls messages from the last `SYNC_LOOKBACK_DAYS` (default 1). From then on, the checkpoint advances after every successful iteration — only new mail is touched.
 
-#### Using Node.js
+## Configuration
+
+Every knob is an environment variable; see `.env.example` for the full list.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SYNC_INTERVAL_SECONDS` | `300` | Wait between iterations. `0` = run once and exit. |
+| `SYNC_LOOKBACK_DAYS` | `1` | On the very first run, how far back to reach. |
+| `MAX_MESSAGES_PER_RUN` | `100` | Per-iteration processing cap. Remainder is picked up next run. |
+| `FILTER_CONFIG_PATH` | — | Optional JSON file for subject filtering. |
+| `DRY_RUN` | `false` | Fetch and filter, but don't append to Gmail. |
+
+## Operations
 
 ```bash
-npm install
-npm start sync
+npm start sync               # long-running daemon (default)
+npm start sync --once        # single run, exit
+npm start sync --dry-run     # preview without writing to Gmail
+npm run reset                # clear checkpoints (dedup history stays intact)
+npm start test-source        # verify Zoho credentials
+npm start test-destination   # verify Gmail IMAP credentials
 ```
 
-## Scheduler
+## Deployment
 
-Since `mail-bridge` exposes a single "sync once" command, you can run it every 5 minutes using cron:
+Put it in a Docker container with `restart: unless-stopped`. That's the whole recipe. Logs stream to stdout, so `docker logs` just works. `docker stop` sends `SIGTERM`, the current iteration finishes cleanly, resources close, exit 0.
 
-```bash
-*/5 * * * * /path/to/mail-bridge sync
-```
+For cron or systemd timers, set `SYNC_INTERVAL_SECONDS=0` (or pass `--once`) and schedule `npm start sync` however you prefer.
 
 ## Architecture
 
-- `src/core/`: Interfaces, Sync Engine, State Management.
-- `src/providers/`: Zoho and Gmail specific implementations.
-- `src/utils/`: Logger, Config validation, Retry logic.
+- `src/core/` — interfaces, sync engine, checkpoints, dedup.
+- `src/providers/source/` — Zoho Mail REST API client.
+- `src/providers/destination/` — Gmail IMAP appender.
+- `src/utils/` — config, logger.
+
+See [`DESIGN.md`](./DESIGN.md) for the dedup strategy and extensibility notes.

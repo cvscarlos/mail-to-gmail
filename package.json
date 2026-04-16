@@ -1,7 +1,7 @@
 {
-  "name": "mail-bridge",
+  "name": "zoho-to-gmail",
   "version": "1.0.0",
-  "description": "Production-quality email sync tool (Zoho -> Gmail)",
+  "description": "Sync Zoho Mail (including Zoho Free) to Gmail without IMAP on the source side",
   "engines": {
     "node": ">=24.0.0"
   },

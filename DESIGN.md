@@ -1,8 +1,8 @@
-# mail-bridge: Technical Design Document
+# zoho-to-gmail: Technical Design Document
 
 ## 1. Provider Abstractions
 
-To ensure `mail-bridge` is extensible, we use a clean separation between the core sync logic and the specific email service implementations.
+To ensure `zoho-to-gmail` is extensible, we use a clean separation between the core sync logic and the specific email service implementations.
 
 ### Interfaces
 
@@ -15,7 +15,7 @@ The system is designed to allow new providers to be registered in `src/providers
 
 ## 2. Deduplication Strategy
 
-Preventing duplicate emails in the destination is critical for a sync tool. `mail-bridge` employs a multi-layered deduplication strategy:
+Preventing duplicate emails in the destination is critical for a sync tool. `zoho-to-gmail` employs a multi-layered deduplication strategy:
 
 ### Layer 1: Source Message ID
 
@@ -45,4 +45,4 @@ On each run, the engine:
 
 ### Locking
 
-To prevent data corruption from overlapping cron jobs, `mail-bridge` uses a file-based lock (`.db.lock`). If a sync is already in progress, new instances will exit immediately.
+To prevent data corruption from overlapping cron jobs, `zoho-to-gmail` uses a file-based lock (`.db.lock`). If a sync is already in progress, new instances will exit immediately.

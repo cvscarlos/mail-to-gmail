@@ -5,7 +5,7 @@ dotenv.config();
 
 const configSchema = z.object({
   APP_LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
-  STATE_DB_PATH: z.string().default('./mail-bridge.db'),
+  STATE_DB_PATH: z.string().default('./zoho-to-gmail.db'),
 
   ZOHO_DC: z.enum(['com', 'eu', 'in', 'com.au', 'com.cn']).default('com'),
   ZOHO_CLIENT_ID: z.string(),
