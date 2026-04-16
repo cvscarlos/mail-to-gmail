@@ -8,6 +8,7 @@
   "type": "module",
   "scripts": {
     "start": "tsx src/index.ts",
+    "reset": "tsx src/index.ts reset-checkpoints",
     "dev": "tsx watch src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

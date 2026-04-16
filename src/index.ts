@@ -69,7 +69,7 @@ program
 
     try {
       await engine.run({
-        lookbackMinutes: config.SYNC_LOOKBACK_MINUTES,
+        lookbackDays: config.SYNC_LOOKBACK_DAYS,
         maxMessages: config.MAX_MESSAGES_PER_RUN,
         concurrency: config.CONCURRENCY,
         sourceFolders: config.ZOHO_FOLDER_NAMES.split(','),
@@ -82,6 +82,22 @@ program
       process.exit(1);
     } finally {
       await release();
+    }
+  });
+
+program
+  .command('reset-checkpoints')
+  .description('Clear all saved sync checkpoints (forces next run to start from lookback period)')
+  .action(async () => {
+    const config = loadConfig();
+    const state = new SqliteStateStore(config.STATE_DB_PATH);
+    
+    try {
+      await state.clearCheckpoints();
+      console.log('✅ Checkpoints cleared successfully. The next sync run will start based on SYNC_LOOKBACK_DAYS.');
+    } catch (err: any) {
+      console.error(`❌ Failed to clear checkpoints: ${err.message}`);
+      process.exit(1);
     }
   });
 

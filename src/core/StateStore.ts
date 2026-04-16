@@ -68,6 +68,10 @@ export class SqliteStateStore implements StateStore {
       .run(provider, account, checkpoint.lastReceivedAt, checkpoint.lastMessageId);
   }
 
+  async clearCheckpoints(): Promise<void> {
+    this.db.exec('DELETE FROM checkpoints');
+  }
+
   async hasSeen(
     provider: string,
     account: string,

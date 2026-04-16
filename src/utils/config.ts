@@ -18,7 +18,7 @@ const configSchema = z.object({
   GMAIL_APP_PASSWORD: z.string(),
   GMAIL_TARGET_MAILBOX: z.string().default('INBOX'),
 
-  SYNC_LOOKBACK_MINUTES: z.coerce.number().default(1440), // 1 day
+  SYNC_LOOKBACK_DAYS: z.coerce.number().default(1),
   MAX_MESSAGES_PER_RUN: z.coerce.number().default(100),
   CONCURRENCY: z.coerce.number().default(5),
 

@@ -47,6 +47,8 @@ export interface DestinationProvider {
 export interface StateStore {
   loadCheckpoint(provider: string, account: string): Promise<SyncCheckpoint>;
   saveCheckpoint(provider: string, account: string, checkpoint: SyncCheckpoint): Promise<void>;
+  clearCheckpoints(): Promise<void>;
+
   hasSeen(
     provider: string,
     account: string,

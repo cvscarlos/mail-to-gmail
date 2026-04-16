@@ -10,7 +10,7 @@ import {
 } from './types.js';
 
 export interface SyncOptions {
-  lookbackMinutes: number;
+  lookbackDays: number;
   maxMessages: number;
   concurrency: number;
   sourceFolders?: string[];
@@ -38,7 +38,17 @@ export class SyncEngine {
     }
 
     const accountId = await this.source.getAccountId();
-    const checkpoint = await this.state.loadCheckpoint(this.source.name, accountId);
+    let checkpoint = await this.state.loadCheckpoint(this.source.name, accountId);
+
+    if (!checkpoint.lastReceivedAt && options.lookbackDays > 0) {
+      const lookbackDate = new Date(Date.now() - options.lookbackDays * 24 * 60 * 60 * 1000);
+      checkpoint = {
+        lastReceivedAt: lookbackDate.toISOString(),
+      };
+      this.logger.info(
+        `${mode}No checkpoint found. Initializing with lookback of ${options.lookbackDays} days (${checkpoint.lastReceivedAt})`
+      );
+    }
 
     this.logger.info(`${mode}Loaded checkpoint for ${accountId}: ${JSON.stringify(checkpoint)}`);
 
