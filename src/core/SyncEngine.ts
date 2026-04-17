@@ -1,143 +1,191 @@
 import crypto from 'crypto';
 import pRetry from 'p-retry';
 import {
-  SourceProvider,
-  DestinationProvider,
-  StateStore,
-  Logger,
-  SyncRecord,
-  SyncFilter,
+  type DestinationConfig,
+  type DestinationProvider,
+  type FilterConfig,
+  type Logger,
+  type MessageMetadata,
+  type SourceConfig,
+  type SourceProvider,
+  type StateStore,
+  type SyncCheckpoint,
+  type SyncRecord,
 } from './types.js';
+import { injectHeader, parseListId, parseMessageId } from './mimeUtils.js';
+import { CONTENT_HASH_HEADER } from './constants.js';
 
-export interface SyncOptions {
-  lookbackDays: number;
-  maxMessages: number;
-  concurrency: number;
-  sourceFolders?: string[];
-  excludeFolders?: string[];
-  targetMailbox?: string;
+export interface SyncEngineArgs {
+  sourceConfig: SourceConfig;
+  source: SourceProvider;
+  destinationConfig: DestinationConfig;
+  destination: DestinationProvider;
+  state: StateStore;
+  logger: Logger;
+}
+
+export interface SyncRunOptions {
   dryRun?: boolean;
-  filter?: SyncFilter;
+  abort?: AbortSignal;
+}
+
+function matchesMetadataFilter(
+  filter: FilterConfig,
+  msg: MessageMetadata,
+  includeListId: boolean
+): boolean {
+  const check = (needles: string[] | undefined, hay: string | undefined): boolean => {
+    if (!needles || needles.length === 0) return true;
+    if (!hay) return false;
+    const lower = hay.toLowerCase();
+    return needles.some((n) => lower.includes(n.toLowerCase()));
+  };
+  if (!check(filter.subjectContains, msg.subject)) return false;
+  if (!check(filter.fromContains, msg.from)) return false;
+  if (!check(filter.toContains, msg.to)) return false;
+  if (includeListId && !check(filter.listIdContains, msg.listId)) return false;
+  return true;
+}
+
+function filterRequiresListId(filter: FilterConfig): boolean {
+  return !!filter.listIdContains && filter.listIdContains.length > 0;
 }
 
 export class SyncEngine {
-  constructor(
-    private source: SourceProvider,
-    private destination: DestinationProvider,
-    private state: StateStore,
-    private logger: Logger
-  ) {}
+  private readonly sourceConfig: SourceConfig;
+  private readonly source: SourceProvider;
+  private readonly destinationConfig: DestinationConfig;
+  private readonly destination: DestinationProvider;
+  private readonly state: StateStore;
+  private readonly logger: Logger;
 
-  async run(options: SyncOptions): Promise<void> {
-    const mode = options.dryRun ? '[DRY RUN] ' : '';
-    this.logger.info(`${mode}Starting sync run: ${this.source.name} -> ${this.destination.name}`);
+  constructor(args: SyncEngineArgs) {
+    this.sourceConfig = args.sourceConfig;
+    this.source = args.source;
+    this.destinationConfig = args.destinationConfig;
+    this.destination = args.destination;
+    this.state = args.state;
+    this.logger = args.logger;
+  }
+
+  public async run(options: SyncRunOptions = {}): Promise<void> {
+    const { abort, dryRun = false } = options;
+    const tag = dryRun ? '[DRY RUN] ' : '';
+    const sourceName = this.sourceConfig.name;
+    const { schedule, filter } = this.sourceConfig;
+
+    this.logger.info(
+      `${tag}Starting sync: ${sourceName} → ${this.destinationConfig.name} (${this.destinationConfig.mailbox})`
+    );
 
     await this.source.connect();
-    if (!options.dryRun) {
-      await this.destination.connect();
-      await this.destination.ensureReady();
-    }
+    await this.destination.connect();
+    await this.destination.ensureReady();
 
-    const accountId = await this.source.getAccountId();
-    let checkpoint = await this.state.loadCheckpoint(this.source.name, accountId);
-
-    if (!checkpoint.lastReceivedAt && options.lookbackDays > 0) {
-      const lookbackDate = new Date(Date.now() - options.lookbackDays * 24 * 60 * 60 * 1000);
-      checkpoint = {
-        lastReceivedAt: lookbackDate.toISOString(),
-      };
+    let checkpoint = await this.state.loadCheckpoint(sourceName);
+    if (!checkpoint.lastReceivedAt && schedule.lookbackDays > 0) {
+      const lookbackStart = new Date(Date.now() - schedule.lookbackDays * 86_400_000);
+      checkpoint = { lastReceivedAt: lookbackStart.toISOString() };
       this.logger.info(
-        `${mode}No checkpoint found. Initializing with lookback of ${options.lookbackDays} days (${checkpoint.lastReceivedAt})`
+        `${tag}No checkpoint for "${sourceName}". Using lookback of ${schedule.lookbackDays} day(s) → ${checkpoint.lastReceivedAt}`
       );
     }
 
-    this.logger.info(`${mode}Loaded checkpoint for ${accountId}: ${JSON.stringify(checkpoint)}`);
-
+    const wantsListId = filterRequiresListId(filter);
     const candidates = await this.source.listCandidateMessages(checkpoint, {
-      folders: options.sourceFolders,
-      excludeFolders: options.excludeFolders,
+      folders: this.sourceConfig.folders,
+      excludeFolders: this.sourceConfig.excludeFolders,
+      fetchListId: wantsListId,
     });
-    this.logger.info(`${mode}Found ${candidates.length} candidate messages`);
+    this.logger.info(`${tag}${sourceName}: ${candidates.length} candidate(s)`);
 
-    let processedCount = 0;
-    let successCount = 0;
-    let skipCount = 0;
-    let filterCount = 0;
-    let errorCount = 0;
-
-    const latestCheckpoint = { ...checkpoint };
+    const latestCheckpoint: SyncCheckpoint = { ...checkpoint };
+    let processed = 0;
+    let imported = 0;
+    let skipped = 0;
+    let filtered = 0;
+    let errors = 0;
+    let dedupedViaGmail = 0;
 
     for (const msg of candidates) {
-      if (processedCount >= options.maxMessages) {
-        this.logger.info(`${mode}Reached max messages limit (${options.maxMessages})`);
+      if (abort?.aborted) {
+        this.logger.info(`${tag}Abort signal received — stopping mid-run`);
         break;
       }
-
-      processedCount++;
+      if (processed >= schedule.maxMessagesPerRun) {
+        this.logger.info(`${tag}Hit maxMessagesPerRun=${schedule.maxMessagesPerRun}; stopping`);
+        break;
+      }
+      processed++;
 
       try {
-        // Filter by subject if specified
-        if (options.filter?.subjectContains && msg.subject) {
-          const filterTerm = options.filter.subjectContains.toLowerCase();
-          if (!msg.subject.toLowerCase().includes(filterTerm)) {
-            filterCount++;
-            this.logger.debug(`${mode}Message filtered out by subject: ${msg.subject}`);
-            continue;
-          }
+        if (!matchesMetadataFilter(filter, msg, false)) {
+          filtered++;
+          this.logger.debug(`${tag}Filtered out by metadata: ${msg.id} (${msg.subject ?? ''})`);
+          continue;
         }
 
-        const alreadySeen = await this.state.hasSeen(this.source.name, accountId, msg.id);
-        if (alreadySeen) {
-          skipCount++;
-          this.logger.debug(`${mode}Skipping already seen message: ${msg.id}`);
+        if (await this.state.hasSeen(sourceName, msg.id)) {
+          skipped++;
+          this.logger.debug(`${tag}Already seen locally: ${msg.id}`);
           continue;
         }
 
         await pRetry(
           async () => {
             this.logger.info(
-              `${mode}Processing message [${processedCount}/${candidates.length}]: ${msg.id} - ${msg.subject}`
+              `${tag}${sourceName} [${processed}/${candidates.length}]: ${msg.id} — ${msg.subject ?? ''}`
             );
 
-            const rawMime = await this.source.fetchRawMessage({ id: msg.id, accountId });
-            const contentHash = crypto.createHash('sha256').update(rawMime).digest('hex');
+            const rawMime = await this.source.fetchRawMessage({
+              id: msg.id,
+              folderId: msg.folderId,
+            });
 
-            const hashSeen = await this.state.hasSeen(
-              this.source.name,
-              accountId,
-              msg.id,
-              contentHash
-            );
-            if (hashSeen) {
-              this.logger.info(`${mode}Message content already seen by hash: ${msg.id}`);
-              skipCount++;
+            if (wantsListId && !msg.listId) {
+              msg.listId = parseListId(rawMime);
+            }
+
+            if (!matchesMetadataFilter(filter, msg, true)) {
+              filtered++;
+              this.logger.debug(`${tag}Filtered out by list-id (post-fetch): ${msg.id}`);
               return;
             }
 
-            if (options.dryRun) {
-              this.logger.info(`[DRY RUN] Would have stored message: ${msg.subject}`);
-            } else {
-              await this.destination.storeRawMessage(rawMime, msg, {
-                targetMailbox: options.targetMailbox,
-              });
+            const contentHash = crypto.createHash('sha256').update(rawMime).digest('hex');
 
-              const record: SyncRecord = {
-                sourceProvider: this.source.name,
-                sourceAccount: accountId,
-                sourceMessageId: msg.id,
-                receivedAt: msg.receivedAt,
-                contentHash,
-                importTimestamp: new Date(),
-                destinationProvider: this.destination.name,
-                destinationMailbox: options.targetMailbox || 'INBOX',
-              };
-
-              await this.state.markSeen(record);
+            if (await this.state.hasSeen(sourceName, msg.id, contentHash)) {
+              skipped++;
+              this.logger.info(`${tag}Duplicate content-hash skipped: ${msg.id}`);
+              return;
             }
 
-            successCount++;
+            const rfcMessageId = parseMessageId(rawMime);
 
-            // Update checkpoint trackers
+            const existsInDest = await this.destination.hasMessage({
+              messageId: rfcMessageId,
+              contentHash,
+            });
+            if (existsInDest) {
+              dedupedViaGmail++;
+              this.logger.info(
+                `${tag}Already in destination (Gmail-side dedup): ${msg.id} msgId=${rfcMessageId ?? 'none'}`
+              );
+              if (!dryRun) await this.recordSeen(msg, contentHash);
+              return;
+            }
+
+            if (dryRun) {
+              this.logger.info(`${tag}Would APPEND: ${msg.id} — ${msg.subject ?? ''}`);
+            } else {
+              const withHashHeader = injectHeader(rawMime, CONTENT_HASH_HEADER, contentHash);
+              await this.destination.storeRawMessage(withHashHeader, msg, {
+                targetMailbox: this.destinationConfig.mailbox,
+              });
+              await this.recordSeen(msg, contentHash);
+            }
+
+            imported++;
             if (
               !latestCheckpoint.lastReceivedAt ||
               msg.receivedAt.toISOString() > latestCheckpoint.lastReceivedAt
@@ -147,32 +195,41 @@ export class SyncEngine {
             }
           },
           {
-            retries: options.dryRun ? 0 : 3,
+            retries: dryRun ? 0 : 3,
             onFailedAttempt: (err) => {
               this.logger.warn(
-                `${mode}Attempt ${err.attemptNumber} failed for message ${msg.id}: ${err.error.message}`
+                `${tag}Attempt ${err.attemptNumber} failed for ${msg.id}: ${err.error.message}`
               );
             },
           }
         );
-      } catch (err: any) {
-        this.logger.error(`${mode}Failed to sync message ${msg.id}: ${err.message}`);
-        errorCount++;
+      } catch (err) {
+        errors++;
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.error(`${tag}Failed to sync ${msg.id}: ${message}`);
       }
     }
 
-    if (!options.dryRun && latestCheckpoint.lastReceivedAt !== checkpoint.lastReceivedAt) {
-      await this.state.saveCheckpoint(this.source.name, accountId, latestCheckpoint);
-      this.logger.info(`${mode}Saved new checkpoint: ${JSON.stringify(latestCheckpoint)}`);
+    if (!dryRun && latestCheckpoint.lastReceivedAt !== checkpoint.lastReceivedAt) {
+      await this.state.saveCheckpoint(sourceName, latestCheckpoint);
+      this.logger.info(`${tag}Checkpoint → ${JSON.stringify(latestCheckpoint)}`);
     }
 
     this.logger.info(
-      `${mode}Sync completed: ${successCount} success, ${skipCount} skipped, ${filterCount} filtered, ${errorCount} errors`
+      `${tag}${sourceName} done: imported=${imported} skipped=${skipped} filtered=${filtered} gmail-dedup=${dedupedViaGmail} errors=${errors}`
     );
+  }
 
-    await this.source.disconnect();
-    if (!options.dryRun) {
-      await this.destination.disconnect();
-    }
+  private async recordSeen(msg: MessageMetadata, contentHash: string): Promise<void> {
+    const record: SyncRecord = {
+      sourceName: this.sourceConfig.name,
+      sourceMessageId: msg.id,
+      receivedAt: msg.receivedAt,
+      contentHash,
+      importTimestamp: new Date(),
+      destinationName: this.destinationConfig.name,
+      destinationMailbox: this.destinationConfig.mailbox,
+    };
+    await this.state.markSeen(record);
   }
 }

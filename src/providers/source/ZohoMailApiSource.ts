@@ -1,5 +1,11 @@
-import axios, { AxiosInstance } from 'axios';
-import { MessageMetadata, MessageRef, SourceProvider, SyncCheckpoint } from '../../core/types.js';
+import axios, { type AxiosError, type AxiosInstance, type AxiosRequestConfig } from 'axios';
+import {
+  type ListOptions,
+  type MessageMetadata,
+  type MessageRef,
+  type SourceProvider,
+  type SyncCheckpoint,
+} from '../../core/types.js';
 
 export interface ZohoConfig {
   dc: string;
@@ -9,28 +15,82 @@ export interface ZohoConfig {
   accountId?: string;
 }
 
-const TOKEN_REFRESH_SAFETY_MS = 60_000; // refresh a minute before expiry
+interface ZohoAccount {
+  accountId: string;
+}
+
+interface ZohoFolder {
+  folderId: string;
+  folderName: string;
+}
+
+interface ZohoMessageListEntry {
+  messageId: string;
+  subject?: string;
+  sender?: string;
+  receivedTime?: string;
+  receivedtime?: string;
+  size?: string;
+}
+
+interface ZohoTokenResponse {
+  access_token: string;
+  expires_in: number | string;
+}
+
+interface ZohoOriginalMessageResponse {
+  data: { content: string };
+}
+
+interface ZohoListResponse<T> {
+  data: T[];
+}
+
+interface RetryableRequest extends AxiosRequestConfig {
+  _retried?: boolean;
+}
+
+const TOKEN_REFRESH_SAFETY_MS = 60_000;
+const DEFAULT_ACCESS_TOKEN_TTL_SECONDS = 3600;
+const MESSAGES_PER_PAGE = 200;
+const PAGINATION_CIRCUIT_BREAKER = 1000;
+const DEFAULT_EXCLUDES = new Set(['Spam', 'Trash']);
+
+function axiosErrorDetails(err: unknown, context: string): Error {
+  const axErr = err as AxiosError | undefined;
+  if (axErr?.response) {
+    return new Error(
+      `${context}: ${axErr.response.status} - ${JSON.stringify(axErr.response.data)}`
+    );
+  }
+  if (err instanceof Error) return err;
+  return new Error(`${context}: ${String(err)}`);
+}
 
 export class ZohoMailApiSource implements SourceProvider {
-  public name = 'zoho';
-  private http: AxiosInstance;
+  public readonly name = 'zoho';
+  private readonly config: ZohoConfig;
+  private readonly http: AxiosInstance;
   private accessToken?: string;
   private tokenExpiresAt = 0;
   private accountId?: string;
 
-  constructor(private config: ZohoConfig) {
-    this.http = axios.create({ timeout: 30_000 });
+  constructor(config: ZohoConfig) {
+    this.config = config;
     this.accountId = config.accountId;
+    this.http = axios.create({ timeout: 30_000 });
 
-    // Auto-refresh on 401 once per request
     this.http.interceptors.response.use(
       (r) => r,
-      async (err) => {
-        const cfg = err.config;
+      async (err: AxiosError) => {
+        const cfg = err.config as RetryableRequest | undefined;
         if (err.response?.status === 401 && cfg && !cfg._retried) {
           cfg._retried = true;
           await this.refreshAccessToken();
-          cfg.headers = { ...cfg.headers, Authorization: `Zoho-oauthtoken ${this.accessToken}` };
+          cfg.headers = {
+            ...cfg.headers,
+            Authorization: `Zoho-oauthtoken ${this.accessToken}`,
+          };
           return this.http.request(cfg);
         }
         return Promise.reject(err);
@@ -38,21 +98,56 @@ export class ZohoMailApiSource implements SourceProvider {
     );
   }
 
-  private getAccountsUrl() {
-    return `https://mail.zoho.${this.config.dc}/api/accounts`;
-  }
-
-  private getRefreshTokenUrl() {
-    return `https://accounts.zoho.${this.config.dc}/oauth/v2/token`;
-  }
-
-  async connect(): Promise<void> {
+  public async connect(): Promise<void> {
     if (!this.isTokenValid()) await this.refreshAccessToken();
     if (!this.accountId) this.accountId = await this.discoverAccountId();
   }
 
-  async disconnect(): Promise<void> {
-    // No explicit disconnect needed for HTTP; token is retained for the next run.
+  public async disconnect(): Promise<void> {
+    // HTTP client has no connection state; the access token is kept for the next run.
+  }
+
+  public async getAccountId(): Promise<string> {
+    if (!this.accountId) await this.connect();
+    if (!this.accountId) throw new Error('Zoho account ID unavailable after connect');
+    return this.accountId;
+  }
+
+  public async listCandidateMessages(
+    checkpoint: SyncCheckpoint,
+    options?: ListOptions
+  ): Promise<MessageMetadata[]> {
+    const accountId = await this.getAccountId();
+    const folders = await this.getFolders(accountId);
+
+    const includeFolders = options?.folders;
+    const excludeFolders = new Set(options?.excludeFolders ?? [...DEFAULT_EXCLUDES]);
+    const targetFolders = folders.filter(
+      (f) =>
+        (!includeFolders ||
+          includeFolders.includes('*') ||
+          includeFolders.includes(f.folderName)) &&
+        !excludeFolders.has(f.folderName)
+    );
+
+    const since = checkpoint.lastReceivedAt ? new Date(checkpoint.lastReceivedAt) : undefined;
+    const hardCap = options?.limit;
+    const collected: MessageMetadata[] = [];
+
+    for (const folder of targetFolders) {
+      await this.paginateFolder(accountId, folder, since, hardCap, collected);
+      if (hardCap !== undefined && collected.length >= hardCap) break;
+    }
+
+    return collected.sort((a, b) => a.receivedAt.getTime() - b.receivedAt.getTime());
+  }
+
+  public async fetchRawMessage(messageRef: MessageRef): Promise<Buffer> {
+    const accountId = await this.getAccountId();
+    const url = `https://mail.zoho.${this.config.dc}/api/accounts/${accountId}/messages/${messageRef.id}/originalmessage`;
+    const resp = await this.http.get<ZohoOriginalMessageResponse>(url);
+    const rawMime = resp.data.data.content;
+    return Buffer.from(rawMime, 'utf-8');
   }
 
   private isTokenValid(): boolean {
@@ -67,144 +162,95 @@ export class ZohoMailApiSource implements SourceProvider {
       grant_type: 'refresh_token',
     });
 
-    const resp = await axios.post(this.getRefreshTokenUrl(), params, { timeout: 30_000 });
-    this.accessToken = resp.data.access_token;
-    const expiresIn = Number(resp.data.expires_in) || 3600;
-    this.tokenExpiresAt = Date.now() + expiresIn * 1000;
+    const resp = await axios.post<ZohoTokenResponse>(
+      `https://accounts.zoho.${this.config.dc}/oauth/v2/token`,
+      params,
+      { timeout: 30_000 }
+    );
 
+    this.accessToken = resp.data.access_token;
+    const expiresInSeconds = Number(resp.data.expires_in) || DEFAULT_ACCESS_TOKEN_TTL_SECONDS;
+    this.tokenExpiresAt = Date.now() + expiresInSeconds * 1000;
     this.http.defaults.headers.common['Authorization'] = `Zoho-oauthtoken ${this.accessToken}`;
   }
 
   private async discoverAccountId(): Promise<string> {
     try {
-      const resp = await this.http.get(this.getAccountsUrl());
+      const resp = await this.http.get<ZohoListResponse<ZohoAccount>>(
+        `https://mail.zoho.${this.config.dc}/api/accounts`
+      );
       const accounts = resp.data.data;
-      if (!accounts || accounts.length === 0) {
-        throw new Error('No Zoho accounts found');
-      }
+      if (!accounts || accounts.length === 0) throw new Error('No Zoho accounts found');
       return accounts[0].accountId;
-    } catch (err: any) {
-      if (err.response) {
-        throw new Error(
-          `Zoho discoverAccountId failed: ${err.response.status} - ${JSON.stringify(err.response.data)}`
-        );
-      }
-      throw err;
+    } catch (err) {
+      throw axiosErrorDetails(err, 'Zoho discoverAccountId failed');
     }
   }
 
-  async getAccountId(): Promise<string> {
-    if (!this.accountId) await this.connect();
-    return this.accountId!;
-  }
-
-  async listCandidateMessages(
-    checkpoint: SyncCheckpoint,
-    options?: { folders?: string[]; excludeFolders?: string[]; limit?: number }
-  ): Promise<MessageMetadata[]> {
-    const accountId = await this.getAccountId();
-
-    const folders = await this.getFolders(accountId);
-    const defaultExcludes = new Set(['Spam', 'Trash']);
-    const folderFilter = options?.folders;
-    const excludeNames = new Set(options?.excludeFolders ?? [...defaultExcludes]);
-    const targetFolders = folders.filter(
-      (f) =>
-        (folderFilter === undefined || folderFilter.includes(f.folderName)) &&
-        !excludeNames.has(f.folderName)
-    );
-
-    const since = checkpoint.lastReceivedAt ? new Date(checkpoint.lastReceivedAt) : undefined;
-    const hardCap = options?.limit;
-    const allMessages: MessageMetadata[] = [];
-
-    for (const folder of targetFolders) {
-      const url = `https://mail.zoho.${this.config.dc}/api/accounts/${accountId}/messages/view`;
-      const limitPerPage = 200; // Zoho's documented max per page
-      let start = 1;
-      let iterations = 0;
-      let reachedCheckpoint = false;
-
-      while (!reachedCheckpoint) {
-        if (++iterations > 1000) {
-          throw new Error('Circuit breaker triggered: Too many pagination requests to Zoho');
-        }
-
-        const params: any = {
-          folderId: folder.folderId,
-          start,
-          limit: limitPerPage,
-          sortBy: 'date',
-          sortorder: 'false', // descending: newest first, so we can early-stop at checkpoint
-          status: 'all',
-          threadedMails: 'false',
-        };
-
-        let messages: any[];
-        try {
-          const resp = await this.http.get(url, { params });
-          messages = resp.data.data || [];
-        } catch (err: any) {
-          if (err.response) {
-            throw new Error(
-              `Zoho view messages failed for folder ${folder.folderName}: ${err.response.status} - ${JSON.stringify(err.response.data)}`
-            );
-          }
-          throw err;
-        }
-
-        if (!Array.isArray(messages) || messages.length === 0) break;
-
-        for (const m of messages) {
-          const receivedAt = new Date(parseInt(m.receivedTime || m.receivedtime));
-          if (since && receivedAt < since) {
-            reachedCheckpoint = true;
-            break;
-          }
-          allMessages.push({
-            id: m.messageId,
-            receivedAt,
-            subject: m.subject,
-            from: m.sender,
-            folderId: folder.folderId,
-            folderName: folder.folderName,
-            rawSize: parseInt(m.size),
-          });
-          if (hardCap !== undefined && allMessages.length >= hardCap) {
-            reachedCheckpoint = true;
-            break;
-          }
-        }
-
-        if (messages.length < limitPerPage) break; // reached end of folder
-        start += messages.length;
-      }
-    }
-
-    return allMessages.sort((a, b) => a.receivedAt.getTime() - b.receivedAt.getTime());
-  }
-
-  private async getFolders(accountId: string): Promise<any[]> {
+  private async getFolders(accountId: string): Promise<ZohoFolder[]> {
     try {
-      const resp = await this.http.get(
+      const resp = await this.http.get<ZohoListResponse<ZohoFolder>>(
         `https://mail.zoho.${this.config.dc}/api/accounts/${accountId}/folders`
       );
-      return resp.data.data || [];
-    } catch (err: any) {
-      if (err.response) {
-        throw new Error(
-          `Zoho getFolders failed: ${err.response.status} - ${JSON.stringify(err.response.data)}`
-        );
-      }
-      throw err;
+      return resp.data.data ?? [];
+    } catch (err) {
+      throw axiosErrorDetails(err, 'Zoho getFolders failed');
     }
   }
 
-  async fetchRawMessage(messageRef: MessageRef): Promise<Buffer> {
-    const url = `https://mail.zoho.${this.config.dc}/api/accounts/${messageRef.accountId}/messages/${messageRef.id}/originalmessage`;
-    const resp = await this.http.get(url);
-    // Zoho returns original MIME in the "content" field of the originalmessage response
-    const rawMime = resp.data.data.content;
-    return Buffer.from(rawMime, 'utf-8');
+  private async paginateFolder(
+    accountId: string,
+    folder: ZohoFolder,
+    since: Date | undefined,
+    hardCap: number | undefined,
+    collected: MessageMetadata[]
+  ): Promise<void> {
+    const url = `https://mail.zoho.${this.config.dc}/api/accounts/${accountId}/messages/view`;
+    let start = 1;
+    let iterations = 0;
+
+    while (true) {
+      if (++iterations > PAGINATION_CIRCUIT_BREAKER) {
+        throw new Error('Zoho pagination circuit breaker triggered');
+      }
+
+      const params = {
+        folderId: folder.folderId,
+        start,
+        limit: MESSAGES_PER_PAGE,
+        sortBy: 'date',
+        sortorder: 'false',
+        status: 'all',
+        threadedMails: 'false',
+      };
+
+      let messages: ZohoMessageListEntry[];
+      try {
+        const resp = await this.http.get<ZohoListResponse<ZohoMessageListEntry>>(url, { params });
+        messages = resp.data.data ?? [];
+      } catch (err) {
+        throw axiosErrorDetails(err, `Zoho view messages failed for ${folder.folderName}`);
+      }
+
+      if (messages.length === 0) return;
+
+      for (const m of messages) {
+        const receivedAt = new Date(Number(m.receivedTime ?? m.receivedtime ?? 0));
+        if (since && receivedAt < since) return;
+        collected.push({
+          id: m.messageId,
+          receivedAt,
+          subject: m.subject,
+          from: m.sender,
+          folderId: folder.folderId,
+          folderName: folder.folderName,
+          rawSize: m.size !== undefined ? Number(m.size) : undefined,
+        });
+        if (hardCap !== undefined && collected.length >= hardCap) return;
+      }
+
+      if (messages.length < MESSAGES_PER_PAGE) return;
+      start += messages.length;
+    }
   }
 }
