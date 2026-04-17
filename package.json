@@ -1,14 +1,14 @@
 {
-  "name": "zoho-to-gmail",
-  "version": "1.0.0",
-  "description": "Sync Zoho Mail (including Zoho Free) to Gmail without IMAP on the source side",
+  "name": "mail-to-gmail",
+  "version": "2.0.0",
+  "description": "Self-hosted Gmailify replacement: sync Zoho / Yahoo / Outlook mail into one or more Gmail accounts",
   "engines": {
     "node": ">=24.0.0"
   },
   "type": "module",
   "scripts": {
-    "start": "tsx src/index.ts",
-    "reset": "tsx src/index.ts reset-checkpoints",
+    "build": "tsc",
+    "start": "node --max-old-space-size=192 dist/index.js",
     "dev": "tsx watch src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -16,7 +16,9 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
-    "setup:zoho": "tsx tools/zoho-setup.ts"
+    "setup:zoho": "tsx tools/zoho-setup.ts",
+    "setup:imap-source": "tsx tools/setup-imap-source.ts",
+    "setup:gmail-destination": "tsx tools/setup-gmail-destination.ts"
   },
   "dependencies": {
     "axios": "1.15.0",
@@ -26,9 +28,11 @@
     "imapflow": "1.3.1",
     "inquirer": "^13.4.1",
     "libsql": "^0.5.29",
+    "lru-cache": "^11.3.5",
     "p-retry": "8.0.0",
     "proper-lockfile": "4.1.2",
     "winston": "3.19.0",
+    "yaml": "^2.8.3",
     "zod": "4.3.6"
   },
   "devDependencies": {
