@@ -1,0 +1,41 @@
+# fly.toml for mail-to-gmail on Fly.io free tier.
+#
+# Before deploying:
+#   flyctl launch --no-deploy --name mail-to-gmail --copy-config
+#   flyctl volumes create mailstate --size 1 --region <your-region>
+#   flyctl secrets set ZOHO_MAIN_CLIENT_ID=... ZOHO_MAIN_CLIENT_SECRET=... ...
+#   flyctl deploy
+#
+# `config.yaml` is baked into the image (no secrets inside it).
+
+app = "mail-to-gmail"
+primary_region = "iad"
+
+[build]
+
+[[mounts]]
+  source = "mailstate"
+  destination = "/data"
+
+[env]
+  APP_LOG_LEVEL = "info"
+  STATE_DB_PATH = "/data/mail-to-gmail.db"
+  CONFIG_PATH = "/app/config.yaml"
+  NODE_ENV = "production"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+  cpus = 1
+
+[deploy]
+  strategy = "immediate"
+
+# Always-on: daemon holds long-lived IMAP IDLE sockets.
+[metrics]
+  port = 0
+
+[experimental]
+  auto_stop_machines = false
+  auto_start_machines = false
+  min_machines_running = 1
