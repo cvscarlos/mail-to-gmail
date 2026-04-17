@@ -1,5 +1,5 @@
 import winston from 'winston';
-import { Logger } from '../core/types.js';
+import { type Logger } from '../core/types.js';
 
 const createLogger = (level: string = 'info'): Logger => {
   const logger = winston.createLogger({
