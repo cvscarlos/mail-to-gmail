@@ -1,0 +1,14 @@
+# Dockerfile.dev
+FROM node:24-alpine
+WORKDIR /app
+
+ARG REPO_OWNER=cvscarlos
+ARG REPO_NAME=mail-to-gmail
+ARG REF=main
+RUN wget -qO- https://codeload.github.com/${REPO_OWNER}/${REPO_NAME}/tar.gz/refs/heads/${REF} \
+  | tar xz --strip-components=1
+
+RUN npm ci && npm run build
+
+# Env vars (DRY_RUN, credentialsPrefix secrets) injected via `docker run -e` or `--env-file`
+CMD ["node", "dist/index.js", "sync"]
