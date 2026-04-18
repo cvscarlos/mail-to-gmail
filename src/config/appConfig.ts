@@ -4,10 +4,10 @@ import YAML from 'yaml';
 import type { AppConfig, DestinationConfig, SourceConfig } from '../core/types.js';
 
 const nameRegex = /^[a-z][a-z0-9-]*$/;
-const credentialsRefRegex = /^[A-Z][A-Z0-9_]*$/;
+const credentialsPrefixRegex = /^[A-Z][A-Z0-9_]*$/;
 
 const scheduleSchema = z.object({
-  intervalSeconds: z.number().int().positive(),
+  intervalMinutes: z.number().positive(),
   lookbackDays: z.number().int().nonnegative(),
   maxMessagesPerRun: z.number().int().positive(),
 });
@@ -23,8 +23,7 @@ const filterSchema = z
 
 const destinationSchema = z.object({
   name: z.string().regex(nameRegex, 'destination name: lowercase alphanumeric + hyphens'),
-  type: z.literal('gmail-imap'),
-  credentialsRef: z.string().regex(credentialsRefRegex, 'credentialsRef: uppercase + underscores'),
+  credentialsPrefix: z.string().regex(credentialsPrefixRegex, 'credentialsPrefix: uppercase + underscores'),
   mailbox: z.string().default('INBOX'),
 });
 
@@ -32,7 +31,7 @@ const zohoSourceSchema = z.object({
   name: z.string().regex(nameRegex, 'source name: lowercase alphanumeric + hyphens'),
   enabled: z.boolean().default(true),
   type: z.literal('zoho-api'),
-  credentialsRef: z.string().regex(credentialsRefRegex),
+  credentialsPrefix: z.string().regex(credentialsPrefixRegex),
   destination: z.string().regex(nameRegex),
   folders: z.array(z.string()).optional(),
   excludeFolders: z.array(z.string()).optional(),
@@ -49,7 +48,7 @@ const imapSourceSchema = z.object({
   host: z.string().optional(),
   port: z.number().int().positive().optional(),
   tls: z.boolean().optional(),
-  credentialsRef: z.string().regex(credentialsRefRegex),
+  credentialsPrefix: z.string().regex(credentialsPrefixRegex),
   destination: z.string().regex(nameRegex),
   folders: z.array(z.string()).optional(),
   excludeFolders: z.array(z.string()).optional(),

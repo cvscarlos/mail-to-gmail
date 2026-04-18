@@ -6,7 +6,7 @@ import lockfile from 'proper-lockfile';
 import { getDestination, loadAppConfig } from './config/appConfig.js';
 import { SqliteStateStore } from './core/StateStore.js';
 import { SyncScheduler } from './core/SyncScheduler.js';
-import { type AppConfig, type SourceConfig } from './core/types.js';
+import { type AppConfig, type Logger, type SourceConfig } from './core/types.js';
 import { createDestination, createSource } from './providers/factories.js';
 import { loadAppEnv } from './utils/config.js';
 import { createLogger } from './utils/logger.js';
@@ -17,31 +17,34 @@ program
   .description('Self-hosted sync from Zoho / Yahoo / Outlook mailboxes into Gmail accounts')
   .version('2.0.0');
 
-async function ensureLockFile(lockPath: string): Promise<void> {
+async function ensureLockFile(lockPath: string, logger: Logger): Promise<void> {
   try {
     await fs.promises.writeFile(lockPath, '', { flag: 'a' });
-  } catch {
-    // File already exists or we lack permission; lockfile.lock() will surface the real error.
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.debug(
+      `ensureLockFile pre-create failed for ${lockPath}: ${message} (continuing; lockfile.lock will surface real errors)`
+    );
   }
 }
 
-async function acquireLock(dbPath: string): Promise<() => Promise<void>> {
+async function acquireLock(dbPath: string, logger: Logger): Promise<() => Promise<void>> {
   const lockPath = path.resolve(`${dbPath}.lock`);
-  await ensureLockFile(lockPath);
+  await ensureLockFile(lockPath, logger);
   const release = await lockfile.lock(lockPath, { retries: 0 });
   return async (): Promise<void> => {
     try {
       await release();
-    } catch {
-      // Another process may have released first; safe to ignore on shutdown.
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.debug(`Lock release warning: ${message} (likely already released during shutdown)`);
     }
   };
 }
 
-function formatInterval(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
-  return `${Math.round(seconds / 360) / 10}h`;
+function formatInterval(minutes: number): string {
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.round((minutes / 60) * 10) / 10}h`;
 }
 
 function printTable(rows: Array<Record<string, string>>, columns: string[]): void {
@@ -61,11 +64,11 @@ function formatSourceRow(source: SourceConfig): Record<string, string> {
   return {
     name: source.name,
     type: source.type,
-    credentialsRef: source.credentialsRef,
+    credentialsPrefix: source.credentialsPrefix,
     destination: source.destination,
     enabled: source.enabled ? 'yes' : 'no',
     idle: source.type === 'imap' && source.idle ? 'yes' : 'no',
-    interval: formatInterval(source.schedule.intervalSeconds),
+    interval: formatInterval(source.schedule.intervalMinutes),
     lookback: `${source.schedule.lookbackDays}d`,
   };
 }
@@ -73,19 +76,18 @@ function formatSourceRow(source: SourceConfig): Record<string, string> {
 function printList(appConfig: AppConfig): void {
   const destinationRows = appConfig.destinations.map((d) => ({
     name: d.name,
-    type: d.type,
-    credentialsRef: d.credentialsRef,
+    credentialsPrefix: d.credentialsPrefix,
     mailbox: d.mailbox,
   }));
   console.warn('\nDestinations');
-  printTable(destinationRows, ['name', 'type', 'credentialsRef', 'mailbox']);
+  printTable(destinationRows, ['name', 'credentialsPrefix', 'mailbox']);
 
   const sourceRows = appConfig.sources.map(formatSourceRow);
   console.warn('\nSources');
   printTable(sourceRows, [
     'name',
     'type',
-    'credentialsRef',
+    'credentialsPrefix',
     'destination',
     'enabled',
     'idle',
@@ -109,7 +111,7 @@ program
     const appConfig = loadAppConfig(env.CONFIG_PATH);
     const state = new SqliteStateStore(env.STATE_DB_PATH);
 
-    const release = await acquireLock(env.STATE_DB_PATH).catch((err: unknown) => {
+    const release = await acquireLock(env.STATE_DB_PATH, logger).catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
       logger.error(
         `Cannot acquire lock on ${env.STATE_DB_PATH}: ${message}. Is another sync process running?`
@@ -163,8 +165,8 @@ program
     }
 
     const destinationConfig = getDestination(appConfig, source.destination);
-    const sourceProvider = createSource(source);
-    const destinationProvider = createDestination(destinationConfig);
+    const sourceProvider = createSource(source, logger);
+    const destinationProvider = createDestination(destinationConfig, logger);
 
     try {
       logger.info(`Connecting source "${source.name}"…`);
@@ -215,7 +217,7 @@ program
     }
 
     const state = new SqliteStateStore(env.STATE_DB_PATH);
-    const release = await acquireLock(env.STATE_DB_PATH).catch((err: unknown) => {
+    const release = await acquireLock(env.STATE_DB_PATH, logger).catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
       logger.error(`Cannot acquire lock: ${message}. Stop the daemon first.`);
       state.close();

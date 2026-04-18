@@ -3,12 +3,6 @@ import { type StateStore, type SyncCheckpoint, type SyncRecord } from './types.j
 
 type Statement = Database.Statement<unknown[]>;
 
-const SCHEMA_VERSION = 2;
-
-export interface StateStoreOptions {
-  legacySourceName?: string;
-}
-
 export class SqliteStateStore implements StateStore {
   private db: Database.Database;
   private stmtLoad!: Statement;
@@ -19,52 +13,13 @@ export class SqliteStateStore implements StateStore {
   private stmtResetSeen!: Statement;
   private stmtResetCheckpoint!: Statement;
 
-  constructor(dbPath: string, options: StateStoreOptions = {}) {
+  constructor(dbPath: string) {
     this.db = new Database(dbPath);
-    this.migrate(options.legacySourceName ?? 'zoho-main');
+    this.createSchema();
     this.prepareStatements();
   }
 
-  private migrate(legacySourceName: string): void {
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS schema_migrations (
-        version INTEGER PRIMARY KEY,
-        applied_at TEXT NOT NULL
-      );
-    `);
-
-    const applied = this.db
-      .prepare('SELECT version FROM schema_migrations WHERE version = ?')
-      .get(SCHEMA_VERSION);
-
-    if (applied) return;
-
-    const legacyExists = this.db
-      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='checkpoints'")
-      .get() as { name: string } | undefined;
-
-    if (!legacyExists) {
-      this.createV2Schema();
-      this.db
-        .prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)')
-        .run(SCHEMA_VERSION, new Date().toISOString());
-      return;
-    }
-
-    const cols = this.db.prepare('PRAGMA table_info(checkpoints)').all() as { name: string }[];
-    const hasSourceName = cols.some((c) => c.name === 'source_name');
-
-    if (hasSourceName) {
-      this.db
-        .prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)')
-        .run(SCHEMA_VERSION, new Date().toISOString());
-      return;
-    }
-
-    this.migrateV1ToV2(legacySourceName);
-  }
-
-  private createV2Schema(): void {
+  private createSchema(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS checkpoints (
         source_name TEXT PRIMARY KEY,
@@ -85,62 +40,6 @@ export class SqliteStateStore implements StateStore {
 
       CREATE INDEX IF NOT EXISTS idx_seen_messages_hash ON seen_messages (content_hash);
     `);
-  }
-
-  private migrateV1ToV2(legacySourceName: string): void {
-    this.db.exec('BEGIN');
-    try {
-      this.db.exec(`
-        CREATE TABLE checkpoints_v2 (
-          source_name TEXT PRIMARY KEY,
-          last_received_at TEXT,
-          last_message_id TEXT
-        );
-      `);
-      this.db
-        .prepare(
-          `INSERT INTO checkpoints_v2 (source_name, last_received_at, last_message_id)
-           SELECT ?, last_received_at, last_message_id FROM checkpoints LIMIT 1`
-        )
-        .run(legacySourceName);
-      this.db.exec('DROP TABLE checkpoints');
-      this.db.exec('ALTER TABLE checkpoints_v2 RENAME TO checkpoints');
-
-      this.db.exec(`
-        CREATE TABLE seen_messages_v2 (
-          source_name TEXT NOT NULL,
-          message_id TEXT NOT NULL,
-          content_hash TEXT,
-          received_at TEXT,
-          import_timestamp TEXT,
-          dest_name TEXT,
-          dest_mailbox TEXT,
-          PRIMARY KEY (source_name, message_id)
-        );
-      `);
-      this.db
-        .prepare(
-          `INSERT OR IGNORE INTO seen_messages_v2
-           (source_name, message_id, content_hash, received_at, import_timestamp, dest_name, dest_mailbox)
-           SELECT ?, message_id, content_hash, received_at, import_timestamp, dest_provider, dest_mailbox
-           FROM seen_messages`
-        )
-        .run(legacySourceName);
-      this.db.exec('DROP TABLE seen_messages');
-      this.db.exec('ALTER TABLE seen_messages_v2 RENAME TO seen_messages');
-      this.db.exec(
-        'CREATE INDEX IF NOT EXISTS idx_seen_messages_hash ON seen_messages (content_hash)'
-      );
-
-      this.db
-        .prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)')
-        .run(SCHEMA_VERSION, new Date().toISOString());
-
-      this.db.exec('COMMIT');
-    } catch (err) {
-      this.db.exec('ROLLBACK');
-      throw err;
-    }
   }
 
   private prepareStatements(): void {

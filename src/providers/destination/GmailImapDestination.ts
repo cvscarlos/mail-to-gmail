@@ -1,12 +1,13 @@
 import { ImapFlow } from 'imapflow';
 import { LRUCache } from 'lru-cache';
-import { type DestinationProvider, type MessageMetadata } from '../../core/types.js';
+import { type DestinationProvider, type Logger, type MessageMetadata } from '../../core/types.js';
 import { CONTENT_HASH_HEADER } from '../../core/constants.js';
 import { getHeader, parseMessageId } from '../../core/mimeUtils.js';
 
 export interface GmailConfig {
   email: string;
   appPassword: string;
+  logger: Logger;
 }
 
 interface MailboxListEntry {
@@ -26,12 +27,14 @@ const ALL_MAIL_FALLBACK = '[Gmail]/All Mail';
 export class GmailImapDestination implements DestinationProvider {
   public readonly name = 'gmail-imap';
   private readonly config: GmailConfig;
+  private readonly logger: Logger;
   private readonly lru: LRUCache<string, true>;
   private client?: ImapFlow;
   private allMailPath?: string;
 
   constructor(config: GmailConfig) {
     this.config = config;
+    this.logger = config.logger;
     this.lru = new LRUCache<string, true>({ max: LRU_MAX });
   }
 
@@ -53,8 +56,9 @@ export class GmailImapDestination implements DestinationProvider {
     if (!this.client) return;
     try {
       await this.client.logout();
-    } catch {
-      // Remote may have already closed the socket; logout can then throw.
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.debug(`Gmail logout threw (socket likely already closed): ${message}`);
     }
     this.client = undefined;
     this.allMailPath = undefined;

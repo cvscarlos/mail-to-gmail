@@ -1,19 +1,17 @@
 import axios, { type AxiosError } from 'axios';
 import chalk from 'chalk';
-import dotenv from 'dotenv';
-import fs from 'fs';
 import inquirer from 'inquirer';
 
 interface EnvDefaults {
   dc?: string;
   clientId?: string;
   clientSecret?: string;
-  credentialsRef?: string;
+  credentialsPrefix?: string;
 }
 
 interface Answers {
   dc: string;
-  credentialsRef: string;
+  credentialsPrefix: string;
   clientId: string;
   clientSecret: string;
   code: string;
@@ -34,23 +32,17 @@ interface FoldersResponse {
 }
 
 function readEnvDefaults(): { defaults: EnvDefaults; maskedSecret: string } {
-  if (!fs.existsSync('.env')) return { defaults: {}, maskedSecret: '' };
-  try {
-    const parsed = dotenv.parse(fs.readFileSync('.env'));
-    const ref = parsed.ZOHO_MAIN_CLIENT_ID ? 'ZOHO_MAIN' : undefined;
-    const defaults: EnvDefaults = {
-      dc: parsed.ZOHO_MAIN_DC,
-      clientId: parsed.ZOHO_MAIN_CLIENT_ID,
-      clientSecret: parsed.ZOHO_MAIN_CLIENT_SECRET,
-      credentialsRef: ref,
-    };
-    const secret = defaults.clientSecret ?? '';
-    const maskedSecret =
-      secret.length > 6 ? `${secret.substring(0, 6)}...***` : secret ? '*** (already set)' : '';
-    return { defaults, maskedSecret };
-  } catch {
-    return { defaults: {}, maskedSecret: '' };
-  }
+  const ref = process.env.ZOHO_MAIN_CLIENT_ID ? 'ZOHO_MAIN' : undefined;
+  const defaults: EnvDefaults = {
+    dc: process.env.ZOHO_MAIN_DC,
+    clientId: process.env.ZOHO_MAIN_CLIENT_ID,
+    clientSecret: process.env.ZOHO_MAIN_CLIENT_SECRET,
+    credentialsPrefix: ref,
+  };
+  const secret = defaults.clientSecret ?? '';
+  const maskedSecret =
+    secret.length > 6 ? `${secret.substring(0, 6)}...***` : secret ? '*** (already set)' : '';
+  return { defaults, maskedSecret };
 }
 
 async function verifyPermissions(accessToken: string, dc: string): Promise<void> {
@@ -121,9 +113,9 @@ async function run(): Promise<void> {
       },
       {
         type: 'input',
-        name: 'credentialsRef',
+        name: 'credentialsPrefix',
         message: 'Credentials env prefix (e.g. ZOHO_MAIN):',
-        default: defaults.credentialsRef ?? 'ZOHO_MAIN',
+        default: defaults.credentialsPrefix ?? 'ZOHO_MAIN',
         validate: (v: string) => /^[A-Z][A-Z0-9_]*$/.test(v) || 'uppercase + underscores + digits',
       },
       {
@@ -172,18 +164,18 @@ async function run(): Promise<void> {
     await verifyPermissions(tokens.access_token, answers.dc);
 
     console.warn(chalk.green.bold('\n✅ Success!'));
-    console.warn(chalk.yellow(`\nAdd to your .env (prefix ${answers.credentialsRef}):\n`));
+    console.warn(chalk.yellow(`\nAdd to your .env (prefix ${answers.credentialsPrefix}):\n`));
     const block = [
-      `${answers.credentialsRef}_DC=${answers.dc}`,
-      `${answers.credentialsRef}_CLIENT_ID=${answers.clientId}`,
-      `${answers.credentialsRef}_CLIENT_SECRET=${answers.clientSecret}`,
-      `${answers.credentialsRef}_REFRESH_TOKEN=${tokens.refresh_token}`,
+      `${answers.credentialsPrefix}_DC=${answers.dc}`,
+      `${answers.credentialsPrefix}_CLIENT_ID=${answers.clientId}`,
+      `${answers.credentialsPrefix}_CLIENT_SECRET=${answers.clientSecret}`,
+      `${answers.credentialsPrefix}_REFRESH_TOKEN=${tokens.refresh_token}`,
     ].join('\n');
     console.warn(chalk.gray('─'.repeat(40)));
     console.warn(block);
     console.warn(chalk.gray('─'.repeat(40)));
     console.warn(
-      chalk.gray('\nThen add a source entry to config.yaml referencing credentialsRef.\n')
+      chalk.gray('\nThen add a source entry to config.yaml referencing credentialsPrefix.\n')
     );
   } catch (err) {
     const axErr = err as AxiosError<{ error?: string }> | undefined;

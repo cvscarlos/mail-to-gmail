@@ -13,7 +13,7 @@ config.yaml  →  SyncScheduler  →  SyncEngine  →  SourceProvider  +  Destin
 - **`SyncScheduler`** owns the daemon loop, the per-source next-due map, back-off, and lazy provider caches keyed by name. It subscribes to IMAP IDLE events and wakes a source the moment it's due.
 - **`SyncEngine`** is the per-source sync orchestrator: load checkpoint → list candidates → filter → fetch raw MIME → dedup check (SQLite + Gmail) → APPEND → mark seen → advance checkpoint.
 - **`SourceProvider` / `DestinationProvider`** are the pluggable interfaces. New protocols (POP3, Graph, etc.) slot in as new classes without touching the engine.
-- **`StateStore`** is a thin SQLite wrapper. Schema is versioned; a single-shot migration lifted the pre-2.0 two-column `(provider, account)` key to `source_name`.
+- **`StateStore`** is a thin SQLite wrapper. All rows are keyed by `source_name`, and the schema is created on first run.
 
 ## 2. Config model
 
@@ -22,15 +22,14 @@ Two sections in `config.yaml`:
 ```yaml
 destinations:
   - name: gmail-1
-    type: gmail-imap
-    credentialsRef: GMAIL_1      # reads GMAIL_1_EMAIL, GMAIL_1_APP_PASSWORD from .env
+    credentialsPrefix: GMAIL_1      # reads GMAIL_1_EMAIL, GMAIL_1_APP_PASSWORD from .env
     mailbox: INBOX
 
 sources:
   - name: zoho-main
     enabled: true
     type: zoho-api
-    credentialsRef: ZOHO_MAIN
+    credentialsPrefix: ZOHO_MAIN
     destination: gmail-1         # must match a destination above
     …
 ```
@@ -63,7 +62,7 @@ If either search hits, we skip the APPEND and record a `seen_messages` row for t
 Each enabled source has a `nextDueAt` timestamp. The scheduler:
 
 1. Collects due sources, runs them sequentially through `SyncEngine` (one message in flight across all sources — keeps memory predictable).
-2. After a successful run, sets `nextDueAt = now + intervalSeconds`.
+2. After a successful run, sets `nextDueAt = now + intervalMinutes`.
 3. On failure, doubles a per-source back-off (cap 30 min).
 4. Sleeps until the soonest `nextDueAt`, racing the timer against an `AbortSignal` and an internal "wake" promise.
 
@@ -80,14 +79,13 @@ Parsing email headers is a minefield (folding, MIME-encoded words, case variants
 
 Headers are parsed from raw bytes using Latin-1 (1-to-1 byte mapping) to avoid UTF-8 corruption on attachments. The injected hash header is prepended to the buffer — Gmail IMAP APPEND takes the raw bytes verbatim, so the custom header is preserved and indexed.
 
-## 6. Memory budget (Fly.io shared-cpu-1x, 256 MB)
+## 6. Memory budget (256 MB target)
 
-Sized conservatively:
+Sized conservatively for a 1×CPU / 256 MB host:
 
 | Component | Estimate |
 |---|---|
 | Node 20 baseline | ~35 MB |
-| V8 heap cap (`--max-old-space-size=192`) | ≤192 MB |
 | `@libsql/client` + DB | ~6 MB |
 | 4× ImapFlow IDLE connections (Yahoo×2, Outlook×2) | ~32–48 MB |
 | 2× ImapFlow destinations (shared across sources) | ~15–25 MB |
@@ -95,19 +93,18 @@ Sized conservatively:
 | Misc (yaml, zod, logger, lru-cache) | ~10 MB |
 | **Steady state** | **~150–180 MB** |
 
+The code is sized to fit the budget. Node runtime tuning (e.g. `--max-old-space-size`) is **not** baked into `npm start` — it's a deployment concern. A tight 256 MB host should launch with `node --max-old-space-size=192 dist/index.js`; a 1 GB dev box just runs `npm start`.
+
 Guard-rails:
 
 - Production runs compiled JS (`dist/`), not `tsx` — saves the transformer overhead.
 - One message in flight: fetch → APPEND → drop reference. No batched MIME in memory.
-- Folder listings cached for 5 min per source.
 - Winston writes to `console` only; no file rotation.
 - Sequential source execution; IDLE wakes don't multiplex concurrent syncs.
 
 ## 7. State schema
 
 ```
-schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT)
-
 checkpoints(source_name PRIMARY KEY, last_received_at, last_message_id)
 
 seen_messages(source_name, message_id, content_hash, received_at,
@@ -116,7 +113,7 @@ seen_messages(source_name, message_id, content_hash, received_at,
 INDEX idx_seen_messages_hash ON (content_hash)
 ```
 
-The v1 → v2 migration runs once on startup. It copies the old single-flow rows under a configurable `source_name` (defaults to `zoho-main`), drops the old tables, and records `(2, now)` in `schema_migrations`.
+Tables are created on first run with `CREATE TABLE IF NOT EXISTS`. There are no migrations — if the schema changes in a breaking way, delete the SQLite file and let the daemon re-walk `lookbackDays` of mail.
 
 ## 8. Adding a new source type
 

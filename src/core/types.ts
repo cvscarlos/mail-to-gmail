@@ -78,7 +78,6 @@ export interface Logger {
 }
 
 export type SourceKind = 'zoho-api' | 'imap';
-export type DestinationKind = 'gmail-imap';
 export type ImapPreset = 'yahoo' | 'outlook';
 
 export interface FilterConfig {
@@ -89,7 +88,7 @@ export interface FilterConfig {
 }
 
 export interface ScheduleConfig {
-  intervalSeconds: number;
+  intervalMinutes: number;
   lookbackDays: number;
   maxMessagesPerRun: number;
 }
@@ -98,7 +97,7 @@ export interface ZohoSourceConfig {
   name: string;
   enabled: boolean;
   type: 'zoho-api';
-  credentialsRef: string;
+  credentialsPrefix: string;
   destination: string;
   folders?: string[];
   excludeFolders?: string[];
@@ -115,7 +114,7 @@ export interface ImapSourceConfig {
   host?: string;
   port?: number;
   tls?: boolean;
-  credentialsRef: string;
+  credentialsPrefix: string;
   destination: string;
   folders?: string[];
   excludeFolders?: string[];
@@ -127,14 +126,11 @@ export interface ImapSourceConfig {
 
 export type SourceConfig = ZohoSourceConfig | ImapSourceConfig;
 
-export interface GmailImapDestinationConfig {
+export interface DestinationConfig {
   name: string;
-  type: 'gmail-imap';
-  credentialsRef: string;
+  credentialsPrefix: string;
   mailbox: string;
 }
-
-export type DestinationConfig = GmailImapDestinationConfig;
 
 export interface AppConfig {
   destinations: DestinationConfig[];

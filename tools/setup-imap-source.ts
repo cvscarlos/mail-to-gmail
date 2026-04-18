@@ -1,10 +1,7 @@
 import { ImapFlow } from 'imapflow';
 import chalk from 'chalk';
 import inquirer from 'inquirer';
-import dotenv from 'dotenv';
 import { appendEnvKeys, hasDuplicate, loadYamlConfig, saveYamlConfig } from './wizardUtils.js';
-
-dotenv.config();
 
 const CONFIG_PATH = process.env.CONFIG_PATH ?? './config.yaml';
 const ENV_PATH = './.env';
@@ -20,11 +17,11 @@ interface PromptAnswers {
   host?: string;
   port?: number;
   tls?: boolean;
-  credentialsRef: string;
+  credentialsPrefix: string;
   email: string;
   appPassword: string;
   destination: string;
-  intervalSeconds: number;
+  intervalMinutes: number;
   lookbackDays: number;
   idle: boolean;
   idleFolder: string;
@@ -109,7 +106,7 @@ async function run(): Promise<void> {
       },
       {
         type: 'input',
-        name: 'credentialsRef',
+        name: 'credentialsPrefix',
         message: 'Credentials env prefix (uppercase, e.g. YAHOO_PERSONAL):',
         validate: (v: string) => /^[A-Z][A-Z0-9_]*$/.test(v) || 'uppercase + underscores + digits',
       },
@@ -134,9 +131,9 @@ async function run(): Promise<void> {
       },
       {
         type: 'number',
-        name: 'intervalSeconds',
-        message: 'Poll interval (seconds):',
-        default: 600,
+        name: 'intervalMinutes',
+        message: 'Poll interval (minutes):',
+        default: 10,
       },
       {
         type: 'number',
@@ -196,11 +193,11 @@ async function run(): Promise<void> {
     name: answers.name,
     enabled: true,
     type: 'imap',
-    credentialsRef: answers.credentialsRef,
+    credentialsPrefix: answers.credentialsPrefix,
     destination: answers.destination,
     idle: answers.idle,
     schedule: {
-      intervalSeconds: answers.intervalSeconds,
+      intervalMinutes: answers.intervalMinutes,
       lookbackDays: answers.lookbackDays,
       maxMessagesPerRun: 100,
     },
@@ -222,10 +219,10 @@ async function run(): Promise<void> {
   console.warn(chalk.green(`✓ Added source "${answers.name}" to ${CONFIG_PATH}`));
 
   appendEnvKeys(ENV_PATH, [
-    { key: `${answers.credentialsRef}_EMAIL`, value: answers.email },
-    { key: `${answers.credentialsRef}_APP_PASSWORD`, value: answers.appPassword },
+    { key: `${answers.credentialsPrefix}_EMAIL`, value: answers.email },
+    { key: `${answers.credentialsPrefix}_APP_PASSWORD`, value: answers.appPassword },
   ]);
-  console.warn(chalk.green(`✓ Added ${answers.credentialsRef}_* secrets to ${ENV_PATH}`));
+  console.warn(chalk.green(`✓ Added ${answers.credentialsPrefix}_* secrets to ${ENV_PATH}`));
 }
 
 run().catch((err: unknown) => {

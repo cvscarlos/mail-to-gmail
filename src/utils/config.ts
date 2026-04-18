@@ -1,7 +1,4 @@
 import { z } from 'zod';
-import dotenv from 'dotenv';
-
-dotenv.config();
 
 const configSchema = z.object({
   APP_LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),

@@ -140,7 +140,7 @@ export class SyncScheduler {
       });
       await engine.run({ abort, dryRun: this.dryRun });
       this.backoffMs.delete(source.name);
-      this.nextDueAt.set(source.name, Date.now() + source.schedule.intervalSeconds * 1000);
+      this.nextDueAt.set(source.name, Date.now() + source.schedule.intervalMinutes * 60_000);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const prev = this.backoffMs.get(source.name) ?? MIN_BACKOFF_MS;
@@ -165,7 +165,7 @@ export class SyncScheduler {
   private async getOrCreateSource(source: SourceConfig): Promise<SourceProvider> {
     const existing = this.sources.get(source.name);
     if (existing) return existing;
-    const provider = createSource(source);
+    const provider = createSource(source, this.logger);
     this.sources.set(source.name, provider);
     return provider;
   }
@@ -175,7 +175,7 @@ export class SyncScheduler {
   ): Promise<DestinationProvider> {
     const existing = this.destinations.get(destination.name);
     if (existing) return existing;
-    const provider = createDestination(destination);
+    const provider = createDestination(destination, this.logger);
     this.destinations.set(destination.name, provider);
     return provider;
   }

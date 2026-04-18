@@ -1,17 +1,14 @@
 import { ImapFlow } from 'imapflow';
 import chalk from 'chalk';
 import inquirer from 'inquirer';
-import dotenv from 'dotenv';
 import { appendEnvKeys, hasDuplicate, loadYamlConfig, saveYamlConfig } from './wizardUtils.js';
-
-dotenv.config();
 
 const CONFIG_PATH = process.env.CONFIG_PATH ?? './config.yaml';
 const ENV_PATH = './.env';
 
 interface PromptAnswers {
   name: string;
-  credentialsRef: string;
+  credentialsPrefix: string;
   email: string;
   appPassword: string;
   mailbox: string;
@@ -58,7 +55,7 @@ async function run(): Promise<void> {
       },
       {
         type: 'input',
-        name: 'credentialsRef',
+        name: 'credentialsPrefix',
         message: 'Credentials env prefix (uppercase, e.g. GMAIL_1):',
         validate: (v: string) => /^[A-Z][A-Z0-9_]*$/.test(v) || 'uppercase + underscores + digits',
       },
@@ -109,18 +106,17 @@ async function run(): Promise<void> {
 
   existing.destinations.push({
     name: answers.name,
-    type: 'gmail-imap',
-    credentialsRef: answers.credentialsRef,
+    credentialsPrefix: answers.credentialsPrefix,
     mailbox: answers.mailbox,
   });
   saveYamlConfig(CONFIG_PATH, existing);
   console.warn(chalk.green(`✓ Added destination "${answers.name}" to ${CONFIG_PATH}`));
 
   appendEnvKeys(ENV_PATH, [
-    { key: `${answers.credentialsRef}_EMAIL`, value: answers.email },
-    { key: `${answers.credentialsRef}_APP_PASSWORD`, value: answers.appPassword },
+    { key: `${answers.credentialsPrefix}_EMAIL`, value: answers.email },
+    { key: `${answers.credentialsPrefix}_APP_PASSWORD`, value: answers.appPassword },
   ]);
-  console.warn(chalk.green(`✓ Added ${answers.credentialsRef}_* secrets to ${ENV_PATH}`));
+  console.warn(chalk.green(`✓ Added ${answers.credentialsPrefix}_* secrets to ${ENV_PATH}`));
 }
 
 run().catch((err: unknown) => {

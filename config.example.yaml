@@ -6,84 +6,44 @@
 #                 at a destination by name and carries its own schedule +
 #                 filter.
 #
-# Secrets (API keys, app passwords) live in .env, keyed by credentialsRef.
+# Secrets (API keys, app passwords) live in .env, keyed by credentialsPrefix.
 # Copy this file to config.yaml and edit in place.
+#
+# This file shows the minimum needed to get started; see the "Full config
+# reference" in README.md for every available field and its default.
 
 destinations:
   - name: gmail-1
-    type: gmail-imap
-    credentialsRef: GMAIL_1       # → GMAIL_1_EMAIL, GMAIL_1_APP_PASSWORD
-    mailbox: INBOX
+    credentialsPrefix: GMAIL_1       # → GMAIL_1_EMAIL, GMAIL_1_APP_PASSWORD
 
   - name: gmail-2
-    type: gmail-imap
-    credentialsRef: GMAIL_2
-    mailbox: INBOX
+    credentialsPrefix: GMAIL_2
 
 sources:
   # Zoho Mail (Free plan compatible — uses Zoho's HTTP API, not IMAP).
   - name: zoho-main
-    enabled: true
     type: zoho-api
-    credentialsRef: ZOHO_MAIN     # → ZOHO_MAIN_DC, ZOHO_MAIN_CLIENT_ID, …
+    credentialsPrefix: ZOHO_MAIN     # → ZOHO_MAIN_DC, ZOHO_MAIN_CLIENT_ID, …
     destination: gmail-1
-    folders: ["*"]                # "*" = all folders except excludeFolders
-    excludeFolders: ["Spam", "Trash"]
-    idle: false                   # Zoho HTTP API has no IDLE equivalent
     schedule:
-      intervalSeconds: 300
+      intervalMinutes: 5
       lookbackDays: 1
       maxMessagesPerRun: 100
-    filter:
-      subjectContains: []
-      fromContains: []
-      toContains: []
-      listIdContains: []
 
   # Yahoo — IMAP + app password (preset fills host/port/tls).
   - name: yahoo-personal
-    enabled: true
     type: imap
     preset: yahoo
-    credentialsRef: YAHOO_PERSONAL   # → YAHOO_PERSONAL_EMAIL, YAHOO_PERSONAL_APP_PASSWORD
-    destination: gmail-2
-    folders: ["*"]
-    excludeFolders: ["Spam", "Trash", "Bulk Mail"]
-    idle: true
-    idleFolder: INBOX
-    schedule: { intervalSeconds: 600, lookbackDays: 1, maxMessagesPerRun: 100 }
-    filter: {}
-
-  - name: yahoo-work
-    enabled: true
-    type: imap
-    preset: yahoo
-    credentialsRef: YAHOO_WORK
+    credentialsPrefix: YAHOO_PERSONAL   # → YAHOO_PERSONAL_EMAIL, YAHOO_PERSONAL_APP_PASSWORD
     destination: gmail-2
     idle: true
-    idleFolder: INBOX
-    schedule: { intervalSeconds: 600, lookbackDays: 1, maxMessagesPerRun: 100 }
-    filter: {}
+    schedule: { intervalMinutes: 10, lookbackDays: 1, maxMessagesPerRun: 100 }
 
   # Personal outlook.com / hotmail — IMAP + app password.
   - name: outlook-personal
-    enabled: true
     type: imap
     preset: outlook
-    credentialsRef: OUTLOOK_PERSONAL
+    credentialsPrefix: OUTLOOK_PERSONAL
     destination: gmail-2
     idle: true
-    idleFolder: INBOX
-    schedule: { intervalSeconds: 600, lookbackDays: 1, maxMessagesPerRun: 100 }
-    filter: {}
-
-  - name: outlook-work
-    enabled: true
-    type: imap
-    preset: outlook
-    credentialsRef: OUTLOOK_WORK
-    destination: gmail-2
-    idle: true
-    idleFolder: INBOX
-    schedule: { intervalSeconds: 600, lookbackDays: 1, maxMessagesPerRun: 100 }
-    filter: {}
+    schedule: { intervalMinutes: 10, lookbackDays: 1, maxMessagesPerRun: 100 }

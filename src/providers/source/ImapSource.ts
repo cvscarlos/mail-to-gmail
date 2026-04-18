@@ -1,6 +1,7 @@
 import { ImapFlow, type FetchMessageObject, type SearchObject } from 'imapflow';
 import {
   type ListOptions,
+  type Logger,
   type MessageMetadata,
   type MessageRef,
   type SourceProvider,
@@ -14,6 +15,7 @@ export interface ImapSourceOptions {
   tls: boolean;
   email: string;
   appPassword: string;
+  logger: Logger;
 }
 
 interface FolderEntry {
@@ -33,7 +35,6 @@ type IdleHandler = (sourceName: string) => void;
 
 const DEFAULT_EXCLUDES = new Set(['Spam', 'Trash']);
 const LIST_ID_BODY_PART = 'HEADER.FIELDS (LIST-ID)';
-const FOLDER_CACHE_TTL_MS = 5 * 60_000;
 const MESSAGE_ID_DELIMITER = '\u0000';
 
 function encodeMessageId(folderPath: string, uid: number): string {
@@ -83,8 +84,8 @@ function coerceDate(value: Date | string | undefined): Date {
 export class ImapSource implements SourceProvider {
   public readonly name: string;
   private readonly options: ImapSourceOptions;
+  private readonly logger: Logger;
   private client?: ImapFlow;
-  private foldersCache?: { at: number; entries: FolderEntry[] };
   private currentFolder?: string;
   private idleHandler?: IdleHandler;
   private idleFolder = 'INBOX';
@@ -93,6 +94,7 @@ export class ImapSource implements SourceProvider {
 
   constructor(options: ImapSourceOptions) {
     this.options = options;
+    this.logger = options.logger;
     this.name = options.name;
   }
 
@@ -132,7 +134,6 @@ export class ImapSource implements SourceProvider {
     });
     await client.connect();
     this.client = client;
-    this.foldersCache = undefined;
     this.currentFolder = undefined;
   }
 
@@ -140,11 +141,11 @@ export class ImapSource implements SourceProvider {
     if (!this.client) return;
     try {
       await this.client.logout();
-    } catch {
-      // Remote may have already closed the socket; logout can then throw.
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.debug(`IMAP "${this.name}" logout threw (socket likely already closed): ${message}`);
     }
     this.client = undefined;
-    this.foldersCache = undefined;
     this.currentFolder = undefined;
   }
 
@@ -246,19 +247,14 @@ export class ImapSource implements SourceProvider {
   }
 
   private async listFolders(): Promise<FolderEntry[]> {
-    if (this.foldersCache && Date.now() - this.foldersCache.at < FOLDER_CACHE_TTL_MS) {
-      return this.foldersCache.entries;
-    }
     const boxes = (await this.client!.list()) as RawListEntry[];
-    const entries: FolderEntry[] = boxes
+    return boxes
       .filter((b): b is RawListEntry & { path: string; name: string } => {
         return (
           typeof b.path === 'string' && typeof b.name === 'string' && !hasNoSelectFlag(b.flags)
         );
       })
       .map((b) => ({ path: b.path, name: b.name, specialUse: b.specialUse }));
-    this.foldersCache = { at: Date.now(), entries };
-    return entries;
   }
 
   private async selectFolder(path: string): Promise<void> {
