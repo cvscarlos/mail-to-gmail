@@ -1,27 +1,38 @@
-# mail-to-gmail
+<h1 align="center">Mail To Gmail</h1>
 
-**Self-hosted replacement for Gmailify.** Sync Zoho, Yahoo, and Outlook mailboxes into one or more Gmail accounts over IMAP, using app passwords — no Google Cloud project, no OAuth screens.
+<p align="center">
+  <img src="docs/assets/banner.png" alt="mail-to-gmail" width="500" />
+</p>
 
-Google is retiring [Gmailify](https://support.google.com/mail/answer/16604719). `mail-to-gmail` takes over: runs as a small daemon, listens for new mail via IMAP IDLE where supported (Yahoo, Outlook.com), and appends messages into your Gmail mailbox exactly once.
+![Node](https://img.shields.io/badge/node-%3E%3D24-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Docker](https://img.shields.io/badge/Dockerfile.dev-ready-blue)
 
-## What it does
+_Self-hosted replacement for Google's retiring [Gmailify](https://support.google.com/mail/answer/16604719). Sync Zoho, Yahoo, and Outlook mailboxes into Gmail over IMAP — no Google Cloud project, no OAuth screens._
 
-- **Multi-source, multi-destination.** One `config.yaml` lists your mailboxes. Each source picks a Gmail destination by name; multiple sources can share a destination.
-- **Archive semantics.** Source messages are never deleted. Gmail is your read/search hub; the originals stay where they are.
-- **No database-as-authority.** SQLite caches checkpoints and seen messages, but Gmail itself is the source of truth for dedup. Losing the SQLite file never produces duplicates in Gmail.
-- **Push detection.** For Yahoo and Outlook, IMAP IDLE wakes the daemon the moment new mail arrives. Zoho (HTTP API, no IDLE) polls on its own schedule.
-- **App-password-only.** Zoho uses an OAuth2 refresh token (supported on the free plan). Every other account uses an IMAP app password. No Google Cloud project, no OAuth flow for Gmail.
+---
 
-## Sources and destinations
+`mail-to-gmail` syncs **Zoho**, **Yahoo**, **Outlook.com / Hotmail**, and generic **IMAP** mailboxes into one or more **Gmail** accounts. It runs as a small daemon, reads from sources, and appends matching messages into Gmail over IMAP using app passwords. No Google Cloud project, no OAuth consent screen.
 
-| Provider | Type | Auth | IDLE |
-|---|---|---|---|
-| Zoho Mail (Free or paid) | HTTP API | OAuth2 refresh token | — |
-| Yahoo Mail | IMAP | App password | ✓ |
-| Outlook.com / Hotmail | IMAP | App password | ✓ |
-| Gmail (destination) | IMAP APPEND | App password | — |
+## Why
 
-Microsoft 365 / work accounts require XOAUTH2 and are not supported yet. Generic IMAP sources can be configured with a custom `host` / `port` / `tls` block.
+- **Multi-source, multi-destination.** One `config.yaml` lists every mailbox. Each source picks a Gmail destination by name; multiple sources can share a destination.
+- **Archive semantics.** Source messages are never deleted. Gmail becomes the read / search hub; originals stay in place.
+- **Gmail-backed deduplication.** SQLite stores checkpoints and a seen-message cache, but Gmail is the authority before every APPEND. Losing the SQLite file never produces duplicates.
+- **Push where available.** Yahoo and Outlook.com wake the daemon via IMAP IDLE. Zoho polls on its own schedule.
+- **Small footprint.** Designed for a 1×CPU / 256 MB host (~180 MB resident steady state).
+
+## Supported providers
+
+| Provider                 | Role        | Type        | Auth                 | IDLE     |
+| ------------------------ | ----------- | ----------- | -------------------- | -------- |
+| Zoho Mail (Free or paid) | Source      | HTTP API    | OAuth2 refresh token | —        |
+| Yahoo Mail               | Source      | IMAP        | App password         | ✓        |
+| Outlook.com / Hotmail    | Source      | IMAP        | App password         | ✓        |
+| Generic IMAP             | Source      | IMAP        | App password         | Optional |
+| Gmail                    | Destination | IMAP APPEND | App password         | —        |
+
+Microsoft 365 / work accounts require XOAUTH2 and are not supported yet.
 
 ## Quick start
 
@@ -29,7 +40,7 @@ Microsoft 365 / work accounts require XOAUTH2 and are not supported yet. Generic
 nvm use && npm install
 cp config.example.yaml config.yaml    # edit source/destination names
 cp .env.example .env                  # fill in the credentialsPrefix secrets
-set -a && source .env && set +a       # bash/zsh: auto-export every var for child processes
+set -a && source .env && set +a       # bash/zsh: auto-export vars for child processes
 
 npm run setup:zoho                    # optional — OAuth wizard that prints a .env block
 npm run setup:imap-source             # optional — interactive Yahoo/Outlook source wizard
@@ -43,105 +54,198 @@ The daemon reads credentials from `process.env` directly — it does **not** imp
 
 First pass: walks back `lookbackDays` (default 1 day) per source and imports everything new. After that the checkpoint advances; only fresh mail moves.
 
-## Configuration
+## Configuration files
 
-Two files:
+| File                    | Purpose                                                           |
+| ----------------------- | ----------------------------------------------------------------- |
+| `config.yaml`           | Destinations, sources, folders, schedules, filters. Not a secret. |
+| `.env` / exported shell | Credentials keyed by `<credentialsPrefix>_<SUFFIX>`. Secret.      |
 
-- **`config.yaml`** — named destinations + sources, per-source schedule and filter. Committed-free: reference template is `config.example.yaml`. Not a secret.
-- **`.env`** — every credential, keyed by `<credentialsPrefix>_<SUFFIX>`. For `credentialsPrefix: GMAIL_1`, export `GMAIL_1_EMAIL` and `GMAIL_1_APP_PASSWORD` before starting the daemon. Never commit this.
+Each destination and source has a `credentialsPrefix`. For `credentialsPrefix: YAHOO_MAIN`, the loader reads `YAHOO_MAIN_EMAIL` and `YAHOO_MAIN_APP_PASSWORD` from `process.env`.
 
-### Filters
+## Configuration examples
 
-Each source carries its own filter. Fields match case-insensitively, AND across fields, OR within each array:
+### Simple
 
-```yaml
-filter:
-  subjectContains: ["Invoice", "Receipt"]
-  fromContains: ["@mybank.com"]
-  toContains: []
-  listIdContains: []
-```
-
-`listIdContains` causes the source to fetch the `List-Id` header on-demand (free for IMAP, one extra HTTP call per message for Zoho).
-
-### Schedules
-
-```yaml
-schedule:
-  intervalMinutes: 10        # how often to poll (IDLE bypasses this when available)
-  lookbackDays: 1            # first-run reach-back; 0 disables the default
-  maxMessagesPerRun: 100     # processing cap per iteration
-```
-
-### Full config reference
-
-`config.example.yaml` is deliberately minimal. Every field below is accepted; defaults are noted in the comments. Omit any field to take its default.
+Minimal single-source Yahoo → Gmail setup:
 
 ```yaml
 destinations:
-  - name: gmail-1              # lowercase + hyphens, referenced by sources
-    credentialsPrefix: GMAIL_1    # uppercase env prefix → GMAIL_1_EMAIL, GMAIL_1_APP_PASSWORD
-    mailbox: INBOX             # default: INBOX
+  - name: gmail-main
+    credentialsPrefix: GMAIL_MAIN
 
 sources:
-  # Zoho Mail (HTTP API — no IDLE).
+  - name: yahoo-main
+    type: imap
+    preset: yahoo
+    credentialsPrefix: YAHOO_MAIN
+    destination: gmail-main
+    idle: true
+    schedule:
+      intervalMinutes: 10
+      lookbackDays: 1
+      maxMessagesPerRun: 100
+```
+
+Required environment:
+
+```bash
+GMAIL_MAIN_EMAIL=you@gmail.com
+GMAIL_MAIN_APP_PASSWORD=your-gmail-app-password
+YAHOO_MAIN_EMAIL=you@yahoo.com
+YAHOO_MAIN_APP_PASSWORD=your-yahoo-app-password
+```
+
+### Advanced
+
+Every field with defaults shown inline. Omit any field to accept its default.
+
+```yaml
+destinations:
+  - name: gmail-main
+    credentialsPrefix: GMAIL_MAIN
+    mailbox: INBOX # default: INBOX
+
+  - name: gmail-archive
+    credentialsPrefix: GMAIL_ARCHIVE
+
+sources:
+  # --- Generic IMAP source (Yahoo / Outlook / custom host) ---
+  - name: yahoo-main
+    enabled: true # default: true
+    type: imap
+    credentialsPrefix: YAHOO_MAIN
+    destination: gmail-main
+
+    # Connection — use a preset OR provide host/port/tls explicitly.
+    preset: yahoo # one of: yahoo, outlook
+    host: imap.mail.yahoo.com # required if no preset
+    port: 993 # default: 993
+    tls: true # default: true
+
+    folders: ['*'] # default: ["*"]
+    excludeFolders: ['Spam', 'Trash'] # default: ["Spam", "Trash"]
+
+    idle: true # default: false
+    idleFolder: INBOX # default: INBOX
+
+    schedule:
+      intervalMinutes: 10 # how often to poll; IDLE can wake sooner
+      lookbackDays: 1 # first-run reach-back; 0 disables default
+      maxMessagesPerRun: 100 # processing cap per iteration
+
+    filter:
+      subjectContains: ['Invoice', 'Receipt']
+      fromContains: ['@mybank.com']
+      toContains: []
+      listIdContains: []
+
+  # --- Zoho Mail source (HTTP API, no IDLE) ---
   - name: zoho-main
-    enabled: true                       # default: true
+    enabled: true
     type: zoho-api
-    credentialsPrefix: ZOHO_MAIN           # → ZOHO_MAIN_DC, ZOHO_MAIN_CLIENT_ID, ZOHO_MAIN_CLIENT_SECRET, ZOHO_MAIN_REFRESH_TOKEN
-    destination: gmail-1
-    folders: ["*"]                      # default: ["*"] (all folders)
-    excludeFolders: ["Spam", "Trash"]   # default: ["Spam", "Trash"]
-    idle: false                         # must be false for Zoho
+    credentialsPrefix: ZOHO_MAIN
+    destination: gmail-archive
+    folders: ['*']
+    excludeFolders: ['Spam', 'Trash']
+    idle: false # must be false for zoho-api
     schedule:
       intervalMinutes: 5
       lookbackDays: 1
       maxMessagesPerRun: 100
-    filter:
-      subjectContains: []
-      fromContains: []
-      toContains: []
-      listIdContains: []
-
-  # Generic IMAP source (Yahoo / Outlook / custom host).
-  - name: yahoo-personal
-    enabled: true
-    type: imap
-    preset: yahoo                       # one of: yahoo, outlook. Omit to supply host/port/tls.
-    host: imap.mail.yahoo.com           # required if no preset
-    port: 993                           # default: 993
-    tls: true                           # default: true
-    credentialsPrefix: YAHOO_PERSONAL
-    destination: gmail-2
-    folders: ["*"]
-    excludeFolders: ["Spam", "Trash", "Bulk Mail"]
-    idle: true                          # default: false
-    idleFolder: INBOX                   # default: INBOX
-    schedule: { intervalMinutes: 10, lookbackDays: 1, maxMessagesPerRun: 100 }
     filter: {}
+```
+
+## Environment variables
+
+### App-level
+
+| Name            | Required | Default              | Description                                                    |
+| --------------- | -------- | -------------------- | -------------------------------------------------------------- |
+| `APP_LOG_LEVEL` | Optional | `info`               | `debug` \| `info` \| `warn` \| `error`.                        |
+| `STATE_DB_PATH` | Optional | `./mail-to-gmail.db` | SQLite state database path (checkpoints + seen-message cache). |
+| `CONFIG_PATH`   | Optional | `./config.yaml`      | Path to the YAML config file.                                  |
+| `DRY_RUN`       | Optional | `false`              | When truthy, skip APPEND + state writes; log intended actions. |
+
+### Per-credentialsPrefix (replace `FOO` with the prefix from `config.yaml`)
+
+| Name                | Required when                    | Default         | Description                                                          |
+| ------------------- | -------------------------------- | --------------- | -------------------------------------------------------------------- |
+| `FOO_EMAIL`         | IMAP source or Gmail destination | —               | Login email address.                                                 |
+| `FOO_APP_PASSWORD`  | IMAP source or Gmail destination | —               | App password (not your account password).                            |
+| `FOO_DC`            | Optional for Zoho sources        | `com`           | Zoho data center: `com`, `eu`, `in`, `com.au`, `com.cn`.             |
+| `FOO_CLIENT_ID`     | Zoho sources                     | —               | Zoho OAuth2 client ID (Self Client).                                 |
+| `FOO_CLIENT_SECRET` | Zoho sources                     | —               | Zoho OAuth2 client secret.                                           |
+| `FOO_REFRESH_TOKEN` | Zoho sources                     | —               | Zoho OAuth2 refresh token.                                           |
+| `FOO_ACCOUNT_ID`    | Optional for Zoho sources        | Auto-discovered | Set only if the OAuth token grants access to multiple Zoho accounts. |
+
+## Filters
+
+Each source carries its own filter. Matching is case-insensitive, **AND** across fields, **OR** within each array:
+
+```yaml
+filter:
+  subjectContains: ['Invoice', 'Receipt']
+  fromContains: ['@mybank.com']
+  toContains: []
+  listIdContains: []
+```
+
+`listIdContains` fetches the `List-Id` header on demand — free for IMAP, one extra HTTP call per message for Zoho.
+
+## Schedules
+
+```yaml
+schedule:
+  intervalMinutes: 10 # how often to poll (IDLE bypasses this when available)
+  lookbackDays: 1 # first-run reach-back; 0 disables the default
+  maxMessagesPerRun: 100 # processing cap per iteration
 ```
 
 ## CLI
 
-```
+```bash
 mail-to-gmail sync                         # daemon, all enabled sources
-mail-to-gmail sync --source yahoo-personal
-mail-to-gmail sync --once                  # single pass, exit
+mail-to-gmail sync --source yahoo-main
+mail-to-gmail sync --once                  # single pass, then exit
 mail-to-gmail sync --dry-run               # no APPEND, no state writes
 mail-to-gmail test-source zoho-main        # connect source + its destination, no writes
-mail-to-gmail reset yahoo-personal         # clear checkpoint + seen_messages for one source
+mail-to-gmail reset yahoo-main             # clear checkpoint + seen_messages for one source
 mail-to-gmail list                         # print destinations and sources
 ```
 
-## DB loss and deduplication
+## Docker (dev)
 
-Before every APPEND, the daemon injects a `X-M2G-Content-Hash: <sha256>` header into the raw MIME. Then it asks Gmail: does a message with this `Message-ID` exist, or with this content hash? If yes, skip. Gmail's own `X-GM-RAW` search is the authority.
+Build a dev image directly from GitHub — no local clone needed:
 
-This means the SQLite file (`mail-to-gmail.db`) is a **cache**, not the source of truth. Wipe it and the daemon re-walks `lookbackDays` of mail from each source; Gmail's search answers "already have this" for every already-imported message, so nothing is duplicated.
+```bash
+docker build -f Dockerfile.dev \
+  --build-arg REF=main \
+  -t mail-to-gmail:dev .
+
+docker run --rm \
+  --env-file .env \
+  -v "$PWD/config.yaml":/app/config.yaml \
+  mail-to-gmail:dev
+```
+
+The Dockerfile streams the GitHub tarball through `tar` (no `git` binary installed → ~30 MB smaller image). Override `REPO_OWNER`, `REPO_NAME`, or `REF` via `--build-arg` for forks or tagged releases.
+
+## Deduplication and database loss
+
+Before every APPEND, the daemon injects this header into the raw MIME:
+
+```
+X-M2G-Content-Hash: <sha256>
+```
+
+It then asks Gmail via `X-GM-RAW` whether a message with the same `Message-ID` **or** content hash already exists. If Gmail finds a match, the append is skipped.
+
+SQLite is a **cache**, not the deduplication authority. Wipe `mail-to-gmail.db` and the daemon re-walks `lookbackDays` of source mail; Gmail search answers "already have this" for every previously-imported message, so nothing is duplicated.
 
 ## Memory footprint
 
-The daemon is designed to fit a 1×CPU / 256 MB host: ≤180 MB resident with five long-lived IMAP IDLE connections, two Gmail IMAP connections (shared across sources), and SQLite.
+Designed for a 1×CPU / 256 MB host: ≤180 MB resident with five long-lived IMAP IDLE connections, two Gmail IMAP connections (shared across sources), and SQLite.
 
 - Compiled JS only (`npm run build` → `dist/`); no `tsx` at runtime.
 - Provider instances reused across iterations, keyed by name.
@@ -152,14 +256,16 @@ Node runtime tuning (heap caps, GC flags) is left to the deployment. On a tight 
 
 ## Architecture
 
-- `src/core/` — `SyncEngine` (per-source sync + dedup), `SyncScheduler` (daemon loop + IDLE wake), `StateStore` (SQLite), shared types, MIME helpers.
-- `src/config/` — YAML config loader (zod-validated) and credential resolvers.
-- `src/providers/source/` — `ZohoMailApiSource` (HTTP API) and `ImapSource` (Yahoo / Outlook / generic IMAP with IDLE).
-- `src/providers/destination/` — `GmailImapDestination` (IMAP APPEND + Gmail-side dedup).
-- `tools/` — setup wizards that test credentials and append to `config.yaml` / `.env`.
+| Path                         | Purpose                                                                   |
+| ---------------------------- | ------------------------------------------------------------------------- |
+| `src/core/`                  | `SyncEngine`, `SyncScheduler`, `StateStore` (SQLite), types, MIME.        |
+| `src/config/`                | YAML config loader (zod-validated) and credential resolvers.              |
+| `src/providers/source/`      | `ZohoMailApiSource` (HTTP API) and `ImapSource` (IMAP + IDLE).            |
+| `src/providers/destination/` | `GmailImapDestination` (IMAP APPEND + Gmail-side dedup).                  |
+| `tools/`                     | Setup wizards that test credentials and append to `config.yaml` / `.env`. |
 
 See [`DESIGN.md`](./DESIGN.md) for details on the dedup strategy and how to add a new source type.
 
 ## Credits
 
-Inspired by [turbogmailify](https://github.com/YoRyan/turbogmailify)'s IDLE-driven design. We keep archive semantics (no source expunge) and use IMAP APPEND instead of the Gmail API.
+Inspired by [turbogmailify](https://github.com/YoRyan/turbogmailify)'s IDLE-driven design. Archive semantics (no source expunge) and IMAP APPEND instead of the Gmail API.
