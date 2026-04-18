@@ -2,6 +2,7 @@
   "name": "mail-to-gmail",
   "version": "2.0.0",
   "description": "Self-hosted Gmailify replacement: sync Zoho / Yahoo / Outlook mail into one or more Gmail accounts",
+  "license": "MIT",
   "engines": {
     "node": ">=24.0.0"
   },
