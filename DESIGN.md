@@ -83,15 +83,15 @@ Headers are parsed from raw bytes using Latin-1 (1-to-1 byte mapping) to avoid U
 
 Sized conservatively for a 1×CPU / 256 MB host:
 
-| Component | Estimate |
-|---|---|
-| Node 20 baseline | ~35 MB |
-| `@libsql/client` + DB | ~6 MB |
-| 4× ImapFlow IDLE connections (Yahoo×2, Outlook×2) | ~32–48 MB |
-| 2× ImapFlow destinations (shared across sources) | ~15–25 MB |
-| Axios + Zoho client state | ~5 MB |
-| Misc (yaml, zod, logger, lru-cache) | ~10 MB |
-| **Steady state** | **~150–180 MB** |
+| Component                                         | Estimate        |
+| ------------------------------------------------- | --------------- |
+| Node 20 baseline                                  | ~35 MB          |
+| `@libsql/client` + DB                             | ~6 MB           |
+| 4× ImapFlow IDLE connections (Yahoo×2, Outlook×2) | ~32–48 MB       |
+| 2× ImapFlow destinations (shared across sources)  | ~15–25 MB       |
+| Axios + Zoho client state                         | ~5 MB           |
+| Misc (yaml, zod, logger, lru-cache)               | ~10 MB          |
+| **Steady state**                                  | **~150–180 MB** |
 
 The code is sized to fit the budget. Node runtime tuning (e.g. `--max-old-space-size`) is **not** baked into `npm start` — it's a deployment concern. A tight 256 MB host should launch with `node --max-old-space-size=192 dist/index.js`; a 1 GB dev box just runs `npm start`.
 
@@ -104,6 +104,8 @@ Guard-rails:
 
 ## 7. State schema
 
+SQLite is used as a local cache, not a source of truth. Two tables, both keyed by `source_name`:
+
 ```
 checkpoints(source_name PRIMARY KEY, last_received_at, last_message_id)
 
@@ -113,7 +115,64 @@ seen_messages(source_name, message_id, content_hash, received_at,
 INDEX idx_seen_messages_hash ON (content_hash)
 ```
 
-Tables are created on first run with `CREATE TABLE IF NOT EXISTS`. There are no migrations — if the schema changes in a breaking way, delete the SQLite file and let the daemon re-walk `lookbackDays` of mail.
+### No migrations
+
+Tables are created on first run with `CREATE TABLE IF NOT EXISTS`. There's no migration framework. If the schema ever changes in a breaking way, the recovery is: delete the SQLite file and let the daemon re-walk `lookbackDays` of mail. Gmail's `X-GM-RAW` dedup catches the re-imports, so nothing duplicates — the only cost is one Gmail search per message in the lookback window.
+
+This trade-off is deliberate: the code avoids a migration layer (complexity, versioning, testing), and the dedup design makes DB loss harmless.
+
+### Retention and cleanup
+
+Left unchecked, `seen_messages` grows one row per imported message — forever. A single source at 50 messages/day produces roughly 18k rows/year (~5–10 MB). A five-source setup over five years would sit around 150–230 MB. Not catastrophic, but unbounded and eventually noticeable on a 256 MB host.
+
+Cleanup policy:
+
+- On **every daemon startup**, rows in `seen_messages` whose `import_timestamp` is older than **90 days** are deleted. The retention window is defined by `SEEN_MESSAGES_RETENTION_DAYS` in `src/index.ts`.
+- `checkpoints` is never pruned — one row per source, already bounded.
+
+**Why 90 days?** The window must comfortably exceed the largest realistic `lookbackDays`. Default `lookbackDays` is 1, occasional users set 7 or 30; 90 gives a 60-day buffer before a prune could ever collide with a reach-back.
+
+**Why is retention safe even if we get the number wrong?** Same reason DB loss is safe: Gmail is the real dedup authority. If prune deletes a row for a message that later re-appears in a lookback window, the `X-GM-RAW` search before APPEND catches it. The local cache is an optimization to skip one Gmail search per message; losing entries makes syncs slightly slower (more Gmail queries) but never produces duplicates.
+
+### Why `import_timestamp` isn't indexed
+
+The prune query is:
+
+```sql
+DELETE FROM seen_messages WHERE import_timestamp < datetime('now', '-90 days')
+```
+
+Without an index on `import_timestamp`, SQLite does a full table scan on each run. At realistic table sizes this is cheap:
+
+| Table rows                             | Scan time (small box, cold cache) |
+| -------------------------------------- | --------------------------------- |
+| 18,000 (1 year, 1 source)              | < 10 ms                           |
+| 100,000 (multi-year, multiple sources) | ~50–100 ms                        |
+| 1,000,000                              | ~0.5–1.5 s                        |
+
+The prune runs **once at startup** — a path where the daemon is already booting, opening connections, and loading config. Even 1.5 s on a million-row table is invisible next to those.
+
+An index on `import_timestamp` would cut the prune from `O(n)` to `O(log n + k)`, but it would cost:
+
+- Roughly 10% more disk (the index is a near-duplicate of the column).
+- A small penalty on every `INSERT` into `seen_messages`, because SQLite has to maintain the extra index alongside the primary key. `INSERT` is the hot path — it runs once per synced message during a sync burst.
+
+Optimizing a rare, cold, one-second operation at the cost of a frequent, hot per-message operation is the wrong direction. No index is the intentional default.
+
+**When to revisit this decision:**
+
+- `seen_messages` grows past ~5 M rows and prune starts taking 10+ seconds.
+- The daemon restarts often enough (e.g., crash-restart loops) that the "rare" startup path stops being rare.
+- Retention gets shortened to days or weeks, so the prune does meaningful deletion work each run.
+
+The migration is one line in `createSchema()`:
+
+```sql
+CREATE INDEX IF NOT EXISTS idx_seen_messages_import_timestamp
+  ON seen_messages (import_timestamp);
+```
+
+SQLite builds the index in place on next startup; no data migration needed.
 
 ## 8. Adding a new source type
 

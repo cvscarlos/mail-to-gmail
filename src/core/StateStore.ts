@@ -12,6 +12,7 @@ export class SqliteStateStore implements StateStore {
   private stmtMarkSeen!: Statement;
   private stmtResetSeen!: Statement;
   private stmtResetCheckpoint!: Statement;
+  private stmtPruneSeen!: Statement;
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath);
@@ -67,6 +68,9 @@ export class SqliteStateStore implements StateStore {
     `);
     this.stmtResetSeen = this.db.prepare('DELETE FROM seen_messages WHERE source_name = ?');
     this.stmtResetCheckpoint = this.db.prepare('DELETE FROM checkpoints WHERE source_name = ?');
+    this.stmtPruneSeen = this.db.prepare(
+      `DELETE FROM seen_messages WHERE import_timestamp < datetime('now', ?)`
+    );
   }
 
   public async loadCheckpoint(sourceName: string): Promise<SyncCheckpoint> {
@@ -116,6 +120,11 @@ export class SqliteStateStore implements StateStore {
       this.db.exec('ROLLBACK');
       throw err;
     }
+  }
+
+  public async pruneSeenMessagesOlderThan(days: number): Promise<number> {
+    const result = this.stmtPruneSeen.run(`-${days} days`);
+    return Number(result.changes ?? 0);
   }
 
   public close(): void {

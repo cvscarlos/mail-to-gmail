@@ -58,6 +58,7 @@ export interface StateStore {
   hasSeen(sourceName: string, messageId: string, contentHash?: string): Promise<boolean>;
   markSeen(record: SyncRecord): Promise<void>;
   resetSource(sourceName: string): Promise<void>;
+  pruneSeenMessagesOlderThan(days: number): Promise<number>;
 }
 
 export interface SyncRecord {

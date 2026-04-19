@@ -17,6 +17,9 @@ program
   .description('Self-hosted sync from Zoho / Yahoo / Outlook mailboxes into Gmail accounts')
   .version('2.0.0');
 
+// Rationale + trade-offs documented in DESIGN.md → "Retention and cleanup".
+const SEEN_MESSAGES_RETENTION_DAYS = 90;
+
 async function ensureLockFile(lockPath: string, logger: Logger): Promise<void> {
   try {
     await fs.promises.writeFile(lockPath, '', { flag: 'a' });
@@ -119,6 +122,11 @@ program
       state.close();
       process.exit(1);
     });
+
+    const pruned = await state.pruneSeenMessagesOlderThan(SEEN_MESSAGES_RETENTION_DAYS);
+    logger.info(
+      `Startup cleanup: pruned ${pruned} seen_messages row(s) older than ${SEEN_MESSAGES_RETENTION_DAYS} days`
+    );
 
     const scheduler = new SyncScheduler({
       appConfig,
