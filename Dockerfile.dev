@@ -1,4 +1,20 @@
-# Dockerfile.dev
+# Dockerfile.dev — build the daemon from a GitHub branch/tag/commit.
+#
+# Examples:
+#   docker build -f Dockerfile.dev -t mail-to-gmail:dev .
+#   docker build -f Dockerfile.dev --build-arg REF=some-branch -t mail-to-gmail:dev .
+#   docker build -f Dockerfile.dev --build-arg REPO_OWNER=your-fork -t mail-to-gmail:dev .
+#
+# Run with `.env` secrets and a mounted config.yaml + persistent state volume:
+#   docker run --rm \
+#     --env-file .env \
+#     -v "$PWD/config.yaml":/app/config.yaml \
+#     -v mail-to-gmail-data:/data \
+#     mail-to-gmail:dev
+#
+# For a deployment image that bakes config.yaml into the image (e.g. Dokploy),
+# add a `COPY config.yaml /app/config.yaml` line after the build step.
+
 FROM node:24-alpine
 WORKDIR /app
 
@@ -8,7 +24,12 @@ ARG REF=main
 RUN wget -qO- https://codeload.github.com/${REPO_OWNER}/${REPO_NAME}/tar.gz/refs/heads/${REF} \
   | tar xz --strip-components=1
 
-RUN npm ci && npm run build
+RUN npm ci && npm run build && npm prune --omit=dev
 
-# Env vars (DRY_RUN, credentialsPrefix secrets) injected via `docker run -e` or `--env-file`
+# Persist SQLite state outside the container filesystem so restarts don't lose
+# checkpoints + seen_messages.
+RUN mkdir -p /data
+ENV STATE_DB_PATH=/data/mail-to-gmail.db
+VOLUME ["/data"]
+
 CMD ["node", "dist/index.js", "sync"]
