@@ -124,7 +124,22 @@ export class ImapSource implements SourceProvider {
   }
 
   public async connect(): Promise<void> {
-    if (this.client) return;
+    if (this.client?.usable) return;
+
+    if (this.client) {
+      this.logger.info(`IMAP "${this.name}" connection is stale — discarding and reconnecting`);
+      try {
+        await this.client.logout();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.info(
+          `IMAP "${this.name}" stale-client logout failed (socket likely already closed): ${message}`
+        );
+      }
+      this.client = undefined;
+      this.currentFolder = undefined;
+    }
+
     const client = new ImapFlow({
       host: this.options.host,
       port: this.options.port,
@@ -143,7 +158,9 @@ export class ImapSource implements SourceProvider {
       await this.client.logout();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      this.logger.debug(`IMAP "${this.name}" logout threw (socket likely already closed): ${message}`);
+      this.logger.info(
+        `IMAP "${this.name}" logout failed (socket likely already closed): ${message}`
+      );
     }
     this.client = undefined;
     this.currentFolder = undefined;

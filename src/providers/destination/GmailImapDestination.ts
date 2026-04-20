@@ -39,7 +39,20 @@ export class GmailImapDestination implements DestinationProvider {
   }
 
   public async connect(): Promise<void> {
-    if (this.client) return;
+    if (this.client?.usable) return;
+
+    if (this.client) {
+      this.logger.info('Gmail IMAP connection is stale — discarding and reconnecting');
+      try {
+        await this.client.logout();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.info(`Gmail stale-client logout failed (socket likely already closed): ${message}`);
+      }
+      this.client = undefined;
+      this.allMailPath = undefined;
+    }
+
     const client = new ImapFlow({
       host: GMAIL_IMAP_HOST,
       port: GMAIL_IMAP_PORT,
@@ -58,7 +71,7 @@ export class GmailImapDestination implements DestinationProvider {
       await this.client.logout();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      this.logger.debug(`Gmail logout threw (socket likely already closed): ${message}`);
+      this.logger.info(`Gmail logout failed (socket likely already closed): ${message}`);
     }
     this.client = undefined;
     this.allMailPath = undefined;
