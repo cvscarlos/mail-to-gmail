@@ -13,7 +13,7 @@ import {
   type SyncRecord,
 } from './types.js';
 import { injectHeader, parseListId, parseMessageId } from './mimeUtils.js';
-import { CONTENT_HASH_HEADER } from './constants.js';
+import { CONTENT_HASH_HEADER, SOURCE_MESSAGE_ID_HEADER, SOURCE_NAME_HEADER } from './constants.js';
 
 export interface SyncEngineArgs {
   sourceConfig: SourceConfig;
@@ -178,8 +178,14 @@ export class SyncEngine {
             if (dryRun) {
               this.logger.info(`${tag}Would APPEND: ${msg.id} — ${msg.subject ?? ''}`);
             } else {
-              const withHashHeader = injectHeader(rawMime, CONTENT_HASH_HEADER, contentHash);
-              await this.destination.storeRawMessage(withHashHeader, msg, {
+              const withHash = injectHeader(rawMime, CONTENT_HASH_HEADER, contentHash);
+              const withSource = injectHeader(withHash, SOURCE_NAME_HEADER, sourceName);
+              const tagged = injectHeader(
+                withSource,
+                SOURCE_MESSAGE_ID_HEADER,
+                encodeURIComponent(msg.id)
+              );
+              await this.destination.storeRawMessage(tagged, msg, {
                 targetMailbox: this.destinationConfig.mailbox,
               });
               await this.recordSeen(msg, contentHash);
@@ -232,4 +238,181 @@ export class SyncEngine {
     };
     await this.state.markSeen(record);
   }
+
+  /**
+   * Detect destination-side deletions (messages in Gmail Trash/Spam that we previously
+   * imported) and propagate them to the source by moving the source copy to its Trash.
+   * Runs only when `sourceConfig.deleteSync.enabled` is true. Safe to call every sync
+   * iteration — no work when the destination has no tagged tombstones.
+   */
+  public async reconcileDeletions(options: SyncRunOptions = {}): Promise<void> {
+    const { abort, dryRun = false } = options;
+    const sourceName = this.sourceConfig.name;
+    const cfg = this.sourceConfig.deleteSync;
+
+    if (!cfg.enabled) {
+      this.logger.debug(`[delete-sync][${sourceName}] disabled; skipping`);
+      return;
+    }
+
+    const tag = `[delete-sync][${sourceName}]${dryRun ? ' [DRY RUN]' : ''} `;
+
+    await this.destination.connect();
+    const candidates = await this.destination.listPropagatableDeletions(sourceName);
+
+    if (candidates.length === 0) {
+      this.logger.debug(`${tag}no pending deletions`);
+      return;
+    }
+
+    this.logger.info(`${tag}found ${candidates.length} pending deletion(s)`);
+
+    const capped = candidates.slice(0, cfg.maxPropagationsPerRun);
+    if (candidates.length > cfg.maxPropagationsPerRun) {
+      this.logger.warn(
+        `${tag}capping to maxPropagationsPerRun=${cfg.maxPropagationsPerRun} (${candidates.length - cfg.maxPropagationsPerRun} deferred to next run)`
+      );
+    }
+
+    await this.source.connect();
+
+    let propagated = 0;
+    let errors = 0;
+    for (const c of capped) {
+      if (abort?.aborted) {
+        this.logger.info(`${tag}abort signal received — stopping`);
+        break;
+      }
+      const sourceMessageId = decodeURIComponent(c.sourceIdEncoded);
+      try {
+        if (dryRun) {
+          this.logger.info(
+            `${tag}would move source message to Trash: ${sourceMessageId} (Gmail ${c.folder} UID ${c.uid})`
+          );
+        } else {
+          await this.source.deleteMessage({ id: sourceMessageId });
+          await this.destination.markPropagated({ folder: c.folder, uid: c.uid });
+          await this.state.recordPropagatedTombstone({
+            gmailMsgId: c.gmailMsgId,
+            sourceName,
+            sourceMessageId,
+            rfcMessageId: c.rfcMessageId,
+            propagatedAt: new Date().toISOString(),
+          });
+          this.logger.info(
+            `${tag}propagated delete: ${sourceMessageId} (Gmail ${c.folder} UID ${c.uid})`
+          );
+        }
+        propagated++;
+      } catch (err) {
+        errors++;
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.error(`${tag}failed to propagate ${sourceMessageId}: ${message}`);
+      }
+    }
+
+    this.logger.info(`${tag}done: propagated=${propagated} errors=${errors}`);
+  }
+
+  /**
+   * Mirror Gmail-side restorations: for each tombstone we previously propagated,
+   * check whether the Gmail copy is still in Trash/Spam. If the user has moved it
+   * back into All Mail, restore the source copy from the source's Trash to INBOX.
+   * If the Gmail copy is gone entirely (hard-deleted / Trash expired), forget it.
+   */
+  public async reconcileRestorations(options: SyncRunOptions = {}): Promise<void> {
+    const { abort, dryRun = false } = options;
+    const sourceName = this.sourceConfig.name;
+    const cfg = this.sourceConfig.deleteSync;
+
+    if (!cfg.enabled) return;
+
+    const tag = `[delete-sync][${sourceName}] (restore)${dryRun ? ' [DRY RUN]' : ''} `;
+
+    const tombstones = await this.state.listPropagatedTombstones(sourceName);
+    if (tombstones.length === 0) {
+      this.logger.debug(`${tag}no tombstones to check`);
+      return;
+    }
+
+    this.logger.debug(`${tag}checking ${tombstones.length} tombstone(s) for restoration`);
+
+    await this.destination.connect();
+    await this.source.connect();
+
+    const maxAgeMs = RESTORATION_TRACKING_DAYS * 24 * 60 * 60 * 1000;
+    const ageCutoff = Date.now() - maxAgeMs;
+    let restored = 0;
+    let hardDeleted = 0;
+    let pending = 0;
+    let expired = 0;
+    let errors = 0;
+
+    for (const t of tombstones) {
+      if (abort?.aborted) {
+        this.logger.info(`${tag}abort signal received — stopping`);
+        break;
+      }
+
+      const propagatedAt = Date.parse(t.propagatedAt);
+      if (Number.isFinite(propagatedAt) && propagatedAt < ageCutoff) {
+        expired++;
+        await this.state.removePropagatedTombstone(t.gmailMsgId);
+        continue;
+      }
+
+      if (!t.rfcMessageId) {
+        // Can't check restoration without a stable header-level identifier.
+        // Leave the row; it'll age out via the ageCutoff path.
+        pending++;
+        continue;
+      }
+
+      try {
+        const state = await this.destination.checkRestoration(t.rfcMessageId);
+        if (state === 'in-trash-or-spam') {
+          pending++;
+          continue;
+        }
+        if (state === 'hard-deleted') {
+          hardDeleted++;
+          await this.state.removePropagatedTombstone(t.gmailMsgId);
+          continue;
+        }
+        // state === 'restored'
+        if (dryRun) {
+          this.logger.info(
+            `${tag}would restore source message: sourceId=${t.sourceMessageId} rfcId=${t.rfcMessageId}`
+          );
+        } else {
+          await this.source.restoreMessage({
+            rfcMessageId: t.rfcMessageId,
+            sourceMessageId: t.sourceMessageId,
+          });
+          await this.state.removePropagatedTombstone(t.gmailMsgId);
+          this.logger.info(
+            `${tag}restored source message to INBOX: sourceId=${t.sourceMessageId} rfcId=${t.rfcMessageId}`
+          );
+        }
+        restored++;
+      } catch (err) {
+        errors++;
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.error(
+          `${tag}failed to check/restore rfcId=${t.rfcMessageId ?? '(none)'}: ${message}`
+        );
+      }
+    }
+
+    if (restored > 0 || hardDeleted > 0 || expired > 0 || errors > 0) {
+      this.logger.info(
+        `${tag}done: restored=${restored} hard-deleted=${hardDeleted} pending=${pending} expired=${expired} errors=${errors}`
+      );
+    }
+  }
 }
+
+// How long we keep tracking a propagated tombstone. Gmail Trash auto-expires in
+// 30 days; after ~35 we can safely forget — a restoration after that window is
+// effectively impossible anyway.
+const RESTORATION_TRACKING_DAYS = 35;

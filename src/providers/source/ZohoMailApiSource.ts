@@ -3,6 +3,7 @@ import {
   type ListOptions,
   type MessageMetadata,
   type MessageRef,
+  type RestoreRef,
   type SourceProvider,
   type SyncCheckpoint,
 } from '../../core/types.js';
@@ -74,6 +75,7 @@ export class ZohoMailApiSource implements SourceProvider {
   private accessToken?: string;
   private tokenExpiresAt = 0;
   private accountId?: string;
+  private inboxFolderId?: string;
 
   constructor(config: ZohoConfig) {
     this.config = config;
@@ -148,6 +150,43 @@ export class ZohoMailApiSource implements SourceProvider {
     const resp = await this.http.get<ZohoOriginalMessageResponse>(url);
     const rawMime = resp.data.data.content;
     return Buffer.from(rawMime, 'utf-8');
+  }
+
+  public async deleteMessage(messageRef: MessageRef): Promise<void> {
+    const accountId = await this.getAccountId();
+    const url = `https://mail.zoho.${this.config.dc}/api/accounts/${accountId}/updatemessage`;
+    try {
+      await this.http.put(url, {
+        mode: 'moveToTrash',
+        messageId: [messageRef.id],
+      });
+    } catch (err) {
+      throw axiosErrorDetails(err, `Zoho moveToTrash failed for ${messageRef.id}`);
+    }
+  }
+
+  public async restoreMessage(ref: RestoreRef): Promise<void> {
+    const accountId = await this.getAccountId();
+    const inboxFolderId = await this.getInboxFolderId(accountId);
+    const url = `https://mail.zoho.${this.config.dc}/api/accounts/${accountId}/updatemessage`;
+    try {
+      await this.http.put(url, {
+        mode: 'moveToFolder',
+        destfolderid: inboxFolderId,
+        messageId: [ref.sourceMessageId],
+      });
+    } catch (err) {
+      throw axiosErrorDetails(err, `Zoho moveToFolder(Inbox) failed for ${ref.sourceMessageId}`);
+    }
+  }
+
+  private async getInboxFolderId(accountId: string): Promise<string> {
+    if (this.inboxFolderId) return this.inboxFolderId;
+    const folders = await this.getFolders(accountId);
+    const inbox = folders.find((f) => f.folderName.toLowerCase() === 'inbox');
+    if (!inbox) throw new Error('Zoho Inbox folder not found');
+    this.inboxFolderId = inbox.folderId;
+    return inbox.folderId;
   }
 
   private isTokenValid(): boolean {

@@ -27,6 +27,16 @@ export interface ListOptions {
   fetchListId?: boolean;
 }
 
+export interface RestoreRef {
+  /** RFC 5322 Message-ID (used by IMAP providers to find the message in source Trash). */
+  rfcMessageId?: string;
+  /**
+   * Original source-side identifier captured at propagation time (used by providers like
+   * Zoho whose native IDs remain stable across folder moves).
+   */
+  sourceMessageId: string;
+}
+
 export interface SourceProvider {
   name: string;
   connect(): Promise<void>;
@@ -37,7 +47,44 @@ export interface SourceProvider {
   ): Promise<MessageMetadata[]>;
   fetchRawMessage(messageRef: MessageRef): Promise<Buffer>;
   getAccountId(): Promise<string>;
+  /**
+   * Move the referenced message to the source's own Trash folder.
+   * Called by delete-sync when a propagated deletion is detected in the destination.
+   */
+  deleteMessage(messageRef: MessageRef): Promise<void>;
+  /**
+   * Move a previously-trashed message back to the source's INBOX.
+   * Called by delete-sync when a user restores a Gmail tombstone and we want to
+   * mirror the restoration on the source side.
+   */
+  restoreMessage(ref: RestoreRef): Promise<void>;
 }
+
+/**
+ * A destination-side hit that should trigger a source-side delete.
+ * Produced by DestinationProvider.listPropagatableDeletions().
+ */
+export interface PropagatableDeletion {
+  /** Destination-side folder path where the deleted message was found (e.g. `[Gmail]/Trash`). */
+  folder: string;
+  /** Destination-side UID of the tombstone. */
+  uid: number;
+  /** Source name tagged on the destination message (matches config source name). */
+  sourceName: string;
+  /** Encoded source message id read from the destination message's header. */
+  sourceIdEncoded: string;
+  /** Gmail's stable X-GM-MSGID (emailId), for tracking across label changes. */
+  gmailMsgId: string;
+  /** RFC 5322 Message-ID parsed from the destination message's headers. */
+  rfcMessageId?: string;
+}
+
+/**
+ * Current state of a previously-propagated Gmail tombstone.
+ * Used by delete-sync's restoration reconciliation pass to decide whether to
+ * un-propagate (move source message back to INBOX) or simply forget about it.
+ */
+export type RestorationState = 'in-trash-or-spam' | 'restored' | 'hard-deleted';
 
 export interface DestinationProvider {
   name: string;
@@ -50,7 +97,32 @@ export interface DestinationProvider {
     metadata: MessageMetadata,
     options?: { targetMailbox?: string }
   ): Promise<void>;
+  /**
+   * Return destination-side messages tagged with our markers for this source that
+   * have landed in a "deleted" folder (Trash, Spam) and have not yet been propagated.
+   */
+  listPropagatableDeletions(sourceName: string): Promise<PropagatableDeletion[]>;
+  /**
+   * Apply the "we've propagated this" marker so future passes skip the message.
+   */
+  markPropagated(ref: { folder: string; uid: number }): Promise<void>;
+  /**
+   * Given a previously-propagated message's RFC Message-ID, determine whether it's
+   * still in Trash/Spam, has been restored (moved back into All Mail), or has been
+   * permanently deleted from the destination account.
+   */
+  checkRestoration(rfcMessageId: string): Promise<RestorationState>;
 }
+
+export interface PropagatedTombstoneRecord {
+  gmailMsgId: string;
+  sourceName: string;
+  sourceMessageId: string;
+  rfcMessageId?: string;
+  propagatedAt: string;
+}
+
+export type PropagatedTombstone = PropagatedTombstoneRecord;
 
 export interface StateStore {
   loadCheckpoint(sourceName: string): Promise<SyncCheckpoint>;
@@ -59,6 +131,9 @@ export interface StateStore {
   markSeen(record: SyncRecord): Promise<void>;
   resetSource(sourceName: string): Promise<void>;
   pruneSeenMessagesOlderThan(days: number): Promise<number>;
+  recordPropagatedTombstone(row: PropagatedTombstoneRecord): Promise<void>;
+  listPropagatedTombstones(sourceName: string): Promise<PropagatedTombstone[]>;
+  removePropagatedTombstone(gmailMsgId: string): Promise<void>;
 }
 
 export interface SyncRecord {
@@ -94,6 +169,11 @@ export interface ScheduleConfig {
   maxMessagesPerRun: number;
 }
 
+export interface DeleteSyncConfig {
+  enabled: boolean;
+  maxPropagationsPerRun: number;
+}
+
 export interface ZohoSourceConfig {
   name: string;
   enabled: boolean;
@@ -105,6 +185,7 @@ export interface ZohoSourceConfig {
   idle: false;
   schedule: ScheduleConfig;
   filter: FilterConfig;
+  deleteSync: DeleteSyncConfig;
 }
 
 export interface ImapSourceConfig {
@@ -123,6 +204,7 @@ export interface ImapSourceConfig {
   idleFolder: string;
   schedule: ScheduleConfig;
   filter: FilterConfig;
+  deleteSync: DeleteSyncConfig;
 }
 
 export type SourceConfig = ZohoSourceConfig | ImapSourceConfig;

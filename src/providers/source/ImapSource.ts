@@ -4,6 +4,7 @@ import {
   type Logger,
   type MessageMetadata,
   type MessageRef,
+  type RestoreRef,
   type SourceProvider,
   type SyncCheckpoint,
 } from '../../core/types.js';
@@ -225,6 +226,63 @@ export class ImapSource implements SourceProvider {
       throw new Error(`Message UID ${uid} not found in ${folderPath}`);
     }
     return Buffer.isBuffer(msg.source) ? msg.source : Buffer.from(msg.source);
+  }
+
+  public async deleteMessage(ref: MessageRef): Promise<void> {
+    await this.connect();
+    const { folderPath, uid } = decodeMessageId(ref.id);
+    const trashPath = await this.findTrashPath();
+    if (!trashPath) {
+      throw new Error(`IMAP "${this.name}" has no \\Trash folder; cannot move UID ${uid}`);
+    }
+    if (trashPath === folderPath) {
+      this.logger.debug(
+        `IMAP "${this.name}" UID ${uid} already in Trash (${folderPath}); skipping move`
+      );
+      return;
+    }
+    // messageMove requires the source folder selected in read-write mode.
+    await this.client!.mailboxOpen(folderPath);
+    await this.client!.messageMove(String(uid), trashPath, { uid: true });
+    // Invalidate so the next selectFolder() re-opens in read-only mode cleanly.
+    this.currentFolder = undefined;
+  }
+
+  private async findTrashPath(): Promise<string | undefined> {
+    const folders = await this.listFolders();
+    const trash = folders.find((f) => f.specialUse === '\\Trash');
+    return trash?.path;
+  }
+
+  public async restoreMessage(ref: RestoreRef): Promise<void> {
+    if (!ref.rfcMessageId) {
+      throw new Error(
+        `IMAP "${this.name}" cannot restore without an RFC Message-ID (sourceMessageId=${ref.sourceMessageId})`
+      );
+    }
+    await this.connect();
+    const trashPath = await this.findTrashPath();
+    if (!trashPath) {
+      throw new Error(`IMAP "${this.name}" has no \\Trash folder; cannot restore`);
+    }
+    await this.client!.mailboxOpen(trashPath);
+    this.currentFolder = undefined;
+
+    // IMAP HEADER search does substring matching on the raw header value;
+    // most servers store Message-ID with angle brackets, and the substring
+    // match works regardless of how we pass it.
+    const searchResult = await this.client!.search(
+      { header: { 'message-id': ref.rfcMessageId } },
+      { uid: true }
+    );
+    const uids = Array.isArray(searchResult) ? searchResult : [];
+    if (uids.length === 0) {
+      throw new Error(
+        `IMAP "${this.name}" found no message with Message-ID "${ref.rfcMessageId}" in ${trashPath}`
+      );
+    }
+    await this.client!.messageMove(uids.map(String).join(','), 'INBOX', { uid: true });
+    this.currentFolder = undefined;
   }
 
   private selectTargetFolders(

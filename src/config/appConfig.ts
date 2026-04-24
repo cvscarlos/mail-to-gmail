@@ -21,9 +21,18 @@ const filterSchema = z
   })
   .default({});
 
+const deleteSyncSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    maxPropagationsPerRun: z.number().int().positive().default(10),
+  })
+  .default({ enabled: false, maxPropagationsPerRun: 10 });
+
 const destinationSchema = z.object({
   name: z.string().regex(nameRegex, 'destination name: lowercase alphanumeric + hyphens'),
-  credentialsPrefix: z.string().regex(credentialsPrefixRegex, 'credentialsPrefix: uppercase + underscores'),
+  credentialsPrefix: z
+    .string()
+    .regex(credentialsPrefixRegex, 'credentialsPrefix: uppercase + underscores'),
   mailbox: z.string().default('INBOX'),
 });
 
@@ -38,6 +47,7 @@ const zohoSourceSchema = z.object({
   idle: z.literal(false).default(false),
   schedule: scheduleSchema,
   filter: filterSchema,
+  deleteSync: deleteSyncSchema,
 });
 
 const imapSourceSchema = z.object({
@@ -56,6 +66,7 @@ const imapSourceSchema = z.object({
   idleFolder: z.string().default('INBOX'),
   schedule: scheduleSchema,
   filter: filterSchema,
+  deleteSync: deleteSyncSchema,
 });
 
 const sourceSchema = z.discriminatedUnion('type', [zohoSourceSchema, imapSourceSchema]);

@@ -139,6 +139,15 @@ export class SyncScheduler {
         logger: this.logger,
       });
       await engine.run({ abort, dryRun: this.dryRun });
+      try {
+        await engine.reconcileDeletions({ abort, dryRun: this.dryRun });
+        await engine.reconcileRestorations({ abort, dryRun: this.dryRun });
+      } catch (err) {
+        // Delete-sync is best-effort and independent of forward ingestion.
+        // Log and continue — do not trip the forward-sync backoff.
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.error(`[delete-sync][${source.name}] pass failed: ${message}`);
+      }
       this.backoffMs.delete(source.name);
       this.nextDueAt.set(source.name, Date.now() + source.schedule.intervalMinutes * 60_000);
     } catch (err) {

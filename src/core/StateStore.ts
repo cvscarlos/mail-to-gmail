@@ -1,5 +1,11 @@
 import Database from 'libsql';
-import { type StateStore, type SyncCheckpoint, type SyncRecord } from './types.js';
+import {
+  type PropagatedTombstone,
+  type PropagatedTombstoneRecord,
+  type StateStore,
+  type SyncCheckpoint,
+  type SyncRecord,
+} from './types.js';
 
 type Statement = Database.Statement<unknown[]>;
 
@@ -13,6 +19,9 @@ export class SqliteStateStore implements StateStore {
   private stmtResetSeen!: Statement;
   private stmtResetCheckpoint!: Statement;
   private stmtPruneSeen!: Statement;
+  private stmtInsertTombstone!: Statement;
+  private stmtListTombstones!: Statement;
+  private stmtRemoveTombstone!: Statement;
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath);
@@ -40,6 +49,14 @@ export class SqliteStateStore implements StateStore {
       );
 
       CREATE INDEX IF NOT EXISTS idx_seen_messages_hash ON seen_messages (content_hash);
+
+      CREATE TABLE IF NOT EXISTS propagated_tombstones (
+        gmail_msg_id TEXT PRIMARY KEY,
+        source_name TEXT NOT NULL,
+        source_message_id TEXT NOT NULL,
+        rfc_message_id TEXT,
+        propagated_at TEXT NOT NULL
+      );
     `);
   }
 
@@ -70,6 +87,19 @@ export class SqliteStateStore implements StateStore {
     this.stmtResetCheckpoint = this.db.prepare('DELETE FROM checkpoints WHERE source_name = ?');
     this.stmtPruneSeen = this.db.prepare(
       `DELETE FROM seen_messages WHERE import_timestamp < datetime('now', ?)`
+    );
+    this.stmtInsertTombstone = this.db.prepare(`
+      INSERT OR REPLACE INTO propagated_tombstones (
+        gmail_msg_id, source_name, source_message_id, rfc_message_id, propagated_at
+      ) VALUES (?, ?, ?, ?, ?)
+    `);
+    this.stmtListTombstones = this.db.prepare(
+      `SELECT gmail_msg_id, source_name, source_message_id, rfc_message_id, propagated_at
+         FROM propagated_tombstones
+        WHERE source_name = ?`
+    );
+    this.stmtRemoveTombstone = this.db.prepare(
+      'DELETE FROM propagated_tombstones WHERE gmail_msg_id = ?'
     );
   }
 
@@ -125,6 +155,37 @@ export class SqliteStateStore implements StateStore {
   public async pruneSeenMessagesOlderThan(days: number): Promise<number> {
     const result = this.stmtPruneSeen.run(`-${days} days`);
     return Number(result.changes ?? 0);
+  }
+
+  public async recordPropagatedTombstone(row: PropagatedTombstoneRecord): Promise<void> {
+    this.stmtInsertTombstone.run(
+      row.gmailMsgId,
+      row.sourceName,
+      row.sourceMessageId,
+      row.rfcMessageId ?? null,
+      row.propagatedAt
+    );
+  }
+
+  public async listPropagatedTombstones(sourceName: string): Promise<PropagatedTombstone[]> {
+    const rows = this.stmtListTombstones.all(sourceName) as Array<{
+      gmail_msg_id: string;
+      source_name: string;
+      source_message_id: string;
+      rfc_message_id: string | null;
+      propagated_at: string;
+    }>;
+    return rows.map((r) => ({
+      gmailMsgId: r.gmail_msg_id,
+      sourceName: r.source_name,
+      sourceMessageId: r.source_message_id,
+      rfcMessageId: r.rfc_message_id ?? undefined,
+      propagatedAt: r.propagated_at,
+    }));
+  }
+
+  public async removePropagatedTombstone(gmailMsgId: string): Promise<void> {
+    this.stmtRemoveTombstone.run(gmailMsgId);
   }
 
   public close(): void {

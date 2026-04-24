@@ -1,7 +1,19 @@
-import { ImapFlow } from 'imapflow';
+import { ImapFlow, type FetchMessageObject } from 'imapflow';
 import { LRUCache } from 'lru-cache';
-import { type DestinationProvider, type Logger, type MessageMetadata } from '../../core/types.js';
-import { CONTENT_HASH_HEADER } from '../../core/constants.js';
+
+import {
+  type DestinationProvider,
+  type Logger,
+  type MessageMetadata,
+  type PropagatableDeletion,
+  type RestorationState,
+} from '../../core/types.js';
+import {
+  CONTENT_HASH_HEADER,
+  PROPAGATED_LABEL,
+  SOURCE_MESSAGE_ID_HEADER,
+  SOURCE_NAME_HEADER,
+} from '../../core/constants.js';
 import { getHeader, parseMessageId } from '../../core/mimeUtils.js';
 
 export interface GmailConfig {
@@ -23,6 +35,9 @@ const GMAIL_IMAP_HOST = 'imap.gmail.com';
 const GMAIL_IMAP_PORT = 993;
 const LRU_MAX = 5_000;
 const ALL_MAIL_FALLBACK = '[Gmail]/All Mail';
+const TRASH_FOLDER = '[Gmail]/Trash';
+const SPAM_FOLDER = '[Gmail]/Spam';
+const DELETION_SCAN_FOLDERS = [TRASH_FOLDER, SPAM_FOLDER] as const;
 
 export class GmailImapDestination implements DestinationProvider {
   public readonly name = 'gmail-imap';
@@ -47,7 +62,9 @@ export class GmailImapDestination implements DestinationProvider {
         await this.client.logout();
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        this.logger.info(`Gmail stale-client logout failed (socket likely already closed): ${message}`);
+        this.logger.info(
+          `Gmail stale-client logout failed (socket likely already closed): ${message}`
+        );
       }
       this.client = undefined;
       this.allMailPath = undefined;
@@ -124,6 +141,95 @@ export class GmailImapDestination implements DestinationProvider {
     const contentHash = getHeader(rawMime, CONTENT_HASH_HEADER);
     if (rfcMessageId) this.lru.set(`m:${rfcMessageId}`, true);
     if (contentHash) this.lru.set(`h:${contentHash}`, true);
+  }
+
+  public async listPropagatableDeletions(sourceName: string): Promise<PropagatableDeletion[]> {
+    await this.connect();
+    const results: PropagatableDeletion[] = [];
+
+    for (const folder of DELETION_SCAN_FOLDERS) {
+      try {
+        await this.client!.mailboxOpen(folder);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.info(`Gmail delete-sync: cannot open ${folder}: ${message}`);
+        continue;
+      }
+
+      // Two distinct header-shaped tokens ANDed — Gmail's X-GM-RAW is full-text so a
+      // user-forwarded message quoting one of these strings in the body could match,
+      // but crafting a body that contains both as valid-looking headers is infeasible.
+      // The post-fetch getHeader() check below enforces they are *actual* headers.
+      const query = `"${SOURCE_NAME_HEADER}:${sourceName}" "${CONTENT_HASH_HEADER}:" -label:${PROPAGATED_LABEL}`;
+      const uids = await this.gmailRawSearch(query);
+      if (uids.length === 0) continue;
+
+      const fetchQuery = {
+        uid: true,
+        emailId: true,
+        headers: [SOURCE_NAME_HEADER, SOURCE_MESSAGE_ID_HEADER, CONTENT_HASH_HEADER, 'Message-ID'],
+      } as Parameters<ImapFlow['fetch']>[1];
+
+      for await (const msg of this.client!.fetch(uids, fetchQuery, {
+        uid: true,
+      }) as AsyncIterable<FetchMessageObject>) {
+        const headers = msg.headers;
+        if (!headers) continue;
+        const buf = Buffer.isBuffer(headers) ? headers : Buffer.from(String(headers), 'latin1');
+        const srcName = getHeader(buf, SOURCE_NAME_HEADER);
+        const srcIdEncoded = getHeader(buf, SOURCE_MESSAGE_ID_HEADER);
+        const contentHash = getHeader(buf, CONTENT_HASH_HEADER);
+        // All three markers must be present as real headers for this to be one of ours.
+        if (!srcName || !srcIdEncoded || !contentHash) continue;
+        if (srcName !== sourceName) continue;
+        const uid = typeof msg.uid === 'number' ? msg.uid : Number(msg.uid);
+        if (!Number.isFinite(uid)) continue;
+        const gmailMsgId = typeof msg.emailId === 'string' ? msg.emailId : undefined;
+        if (!gmailMsgId) {
+          // Without a stable Gmail ID we can't track restoration; skip.
+          this.logger.debug(
+            `Gmail delete-sync: skipping UID ${uid} in ${folder} (no emailId/X-GM-MSGID)`
+          );
+          continue;
+        }
+        const rfcMessageId = parseMessageId(buf);
+        results.push({
+          folder,
+          uid,
+          sourceName: srcName,
+          sourceIdEncoded: srcIdEncoded,
+          gmailMsgId,
+          rfcMessageId,
+        });
+      }
+    }
+
+    return results;
+  }
+
+  public async markPropagated(ref: { folder: string; uid: number }): Promise<void> {
+    await this.connect();
+    await this.client!.mailboxOpen(ref.folder);
+    await this.client!.messageFlagsAdd({ uid: String(ref.uid) }, [PROPAGATED_LABEL], { uid: true });
+  }
+
+  public async checkRestoration(rfcMessageId: string): Promise<RestorationState> {
+    await this.connect();
+    await this.selectAllMailReadOnly();
+
+    // Two Gmail searches, both scoped via X-GM-RAW:
+    //  1. anywhere-count = message present *anywhere* in the account (incl. Trash/Spam)
+    //  2. normal-count   = message present *outside* Trash/Spam (default X-GM-RAW scope)
+    // Decision table:
+    //   anywhere == 0          → hard-deleted
+    //   normal   > 0           → restored (user moved it out of Trash)
+    //   else                   → still in-trash-or-spam
+    const quoted = rfcMessageId.replace(/"/g, '\\"');
+    const anywhere = await this.gmailRawSearch(`rfc822msgid:${quoted} in:anywhere`);
+    if (anywhere.length === 0) return 'hard-deleted';
+    const normal = await this.gmailRawSearch(`rfc822msgid:${quoted}`);
+    if (normal.length > 0) return 'restored';
+    return 'in-trash-or-spam';
   }
 
   private async gmailRawSearch(rawQuery: string): Promise<number[]> {

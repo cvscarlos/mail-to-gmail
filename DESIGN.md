@@ -187,3 +187,91 @@ The engine and scheduler are provider-agnostic — no changes needed there.
 ## 9. Locking
 
 A single `proper-lockfile` guard around the SQLite DB path prevents two daemons, a daemon + a `reset`, or two `reset` calls from racing. `test-source` and `list` are read-only and don't take the lock.
+
+## 10. Delete sync (optional, off by default)
+
+The forward sync is strictly one-way: source → destination. Archive semantics mean we never touch the source. The delete-sync feature adds a narrow opt-in: **when the user deletes a message in Gmail (it lands in `[Gmail]/Trash` or `[Gmail]/Spam`), propagate that intent to the source's own Trash.**
+
+### Why this is safe without a durable mapping
+
+Every `APPEND` carries three markers in the raw MIME:
+
+```
+X-M2G-Content-Hash: <sha256>
+X-M2G-Source:       <source-name>             e.g. yahoo-main
+X-M2G-Source-ID:    <percent-encoded-id>      e.g. INBOX%0023841
+```
+
+These live **in the Gmail message**. They survive a full SQLite wipe, daemon restart, and cache eviction — the only thing that can erase them is the Gmail copy itself being permanently deleted.
+
+The reconciliation pass (`SyncEngine.reconcileDeletions`) does the whole loop against Gmail, with no state from SQLite:
+
+1. `SELECT [Gmail]/Trash`, then `[Gmail]/Spam`.
+2. Search each for messages tagged with our source name AND lacking the `mail-to-gmail-propagated` label.
+3. For each match, read `X-M2G-Source-ID` out of the stored headers and call `source.deleteMessage()` — which `MOVE`s the corresponding source message to the source's own `\Trash` folder (IMAP) or invokes Zoho's `moveToTrash` API.
+4. Apply the `mail-to-gmail-propagated` label to the Gmail message so the next pass skips it.
+
+This design means:
+
+- **SQLite stays disposable.** The pass queries Gmail, not `seen_messages`.
+- **"Empty Trash" in Gmail is safe.** If the tombstones vanish before a pass runs, the pass finds nothing to propagate and the source keeps its copy. Fail-safe.
+- **Gmail account compromise has a backstop.** `maxPropagationsPerRun` (default 10) caps per-pass damage, and operators are expected to first run with `DRY_RUN=true` until the logs look right. A malicious bulk-wipe in Gmail can only propagate a small fraction per pass.
+- **No ambiguity.** Because we iterate _Gmail Trash + Spam_ (not source), every candidate is already known to have been imported by us (the `X-M2G-Source-*` headers say so). There's no "never imported vs deleted" confusion.
+
+### Config
+
+Per source, under `deleteSync`:
+
+```yaml
+sources:
+  - name: yahoo-main
+    ...
+    deleteSync:
+      enabled: false                # default: false — opt-in
+      maxPropagationsPerRun: 10     # default: 10 — safety cap per reconciliation pass
+```
+
+Dry-run behaviour is controlled by the daemon-level `DRY_RUN` env var (same switch the forward sync uses). When `DRY_RUN=true`, reconciliation logs what it _would_ do and takes no source-side writes. Once the logs look right, unset `DRY_RUN` and the next pass will actually move messages.
+
+### When the pass runs
+
+Delete reconciliation runs once per scheduler iteration for each enabled source, immediately after the forward sync finishes (`SyncScheduler.runSingleSource`). On runs with nothing to propagate it's cheap — two Gmail SEARCHes returning zero hits.
+
+### Spam vs Trash
+
+Both are scanned, but propagation is uniform: the source message always moves to the source's own `\Trash`. No source-side Spam mirroring — "user moved this out of their inbox" is the unified intent regardless of whether they clicked Delete or Report Spam in Gmail.
+
+### Restoration mirror (undo support)
+
+When the user restores a message from Gmail Trash back to their Inbox (or any other label), we want to un-propagate — move the source copy out of the source's Trash and back to INBOX. This is handled by a second pass, `SyncEngine.reconcileRestorations`, that runs after `reconcileDeletions`.
+
+Core challenge: once the Gmail message leaves Trash, our header-filtered search in Trash/Spam no longer finds it. We need a separate memory of "we propagated this one" so we can later ask about it. That memory is the `propagated_tombstones` SQLite table:
+
+```
+propagated_tombstones(gmail_msg_id PRIMARY KEY, source_name, source_message_id,
+                      rfc_message_id, propagated_at)
+```
+
+Populated in `reconcileDeletions` immediately after a successful propagation. The `gmail_msg_id` is the stable X-GM-MSGID / `emailId` exposed by Gmail IMAP — it survives label changes, so even after the user moves the message out of Trash we can still correlate.
+
+The reconciliation pass walks each row and asks Gmail, via two `X-GM-RAW rfc822msgid:` searches, which of three states applies:
+
+| Query result                               | Interpretation      | Action                                                                                |
+| ------------------------------------------ | ------------------- | ------------------------------------------------------------------------------------- |
+| `in:anywhere` match = 0                    | hard-deleted        | Forget the row. Leave source copy in source Trash to age out naturally.               |
+| `in:anywhere` > 0, default-scope match = 0 | still in Trash/Spam | Leave the row; user hasn't acted yet.                                                 |
+| `in:anywhere` > 0, default-scope match > 0 | restored            | Call `source.restoreMessage()` to move the source copy to source INBOX; drop the row. |
+
+Rows are also aged out after 35 days (`RESTORATION_TRACKING_DAYS` in `SyncEngine.ts`) — Gmail Trash expires at 30 days, so nothing can reappear after that.
+
+If SQLite is wiped, pending restorations for already-propagated messages are lost. No wrong action results — the source copy simply stays in the source's Trash until the user manually restores it, which is the same recovery path that exists today for any tombstone we didn't see in time.
+
+### What it doesn't do
+
+- **Only acts on messages imported after this feature shipped.** The `X-M2G-Source` and `X-M2G-Source-ID` headers are injected on `APPEND`. The dedup-skip path (when Gmail already has a copy matched by `rfc822msgid:` or content-hash) does not and cannot retrofit headers into existing Gmail messages — IMAP has no edit-in-place. Messages imported pre-upgrade, or deduped against a pre-existing POP3/Gmailify copy, are invisible to delete-sync forever. This is a one-way upgrade boundary.
+- **No EXPUNGE.** The source move is to Trash, not a hard delete. Source providers' own retention (typically 30 days) gives the user a recovery window.
+- **Restore always targets source INBOX.** Not the original source folder. Tracking the pre-delete folder through propagation/restoration would require more state; INBOX is a good-enough landing zone for ~all messages and easy to fan out from there.
+- **Restore requires an RFC 5322 `Message-ID` in the Gmail copy.** IMAP sources find the trashed message in source Trash by `Message-ID` header search. If the original email lacked a Message-ID (extremely rare for Zoho/Yahoo/Outlook, possible for some auto-generated mail), the restoration is skipped and the row ages out without action.
+- **Hard-delete in Gmail before 30 days is not mirrored.** If the user manually empties Gmail Trash, the source copy stays in source Trash for its provider's own retention (~30 days on Yahoo/Outlook/Zoho). They can clean it up manually if they really want it gone everywhere.
+- **No UIDVALIDITY guard.** If the IMAP source rebuilds its mailbox and UIDVALIDITY changes between APPEND and reconciliation, the stored `X-M2G-Source-ID` may no longer map to the intended message. The MOVE will either fail (UID not found → caught as an error, logged, skipped) or, in a genuinely pathological collision, target a different message. UIDVALIDITY rotations are rare but this is a known sharp edge.
+- **Reconciliation failures don't trip forward-sync backoff.** A thrown error from either reconcile pass is logged and swallowed at the scheduler level; the forward sync continues on its normal cadence. Delete-sync is explicitly best-effort.
