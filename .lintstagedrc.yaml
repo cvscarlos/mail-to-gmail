@@ -1,0 +1,10 @@
+# lint-staged config.
+#
+# Typecheck is intentionally NOT here — it runs from .husky/pre-commit as a
+# project-wide check, because tsc needs the whole tsconfig include list, not
+# just the staged files.
+'*.{ts,tsx}':
+  - eslint --fix
+  - prettier --write
+'*.{json,md,yml,yaml}':
+  - prettier --write
