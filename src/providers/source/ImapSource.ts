@@ -148,6 +148,18 @@ export class ImapSource implements SourceProvider {
       auth: { user: this.options.email, pass: this.options.appPassword },
       logger: false,
     });
+    // Register an error listener so async socket-level failures (TLS idle timeout,
+    // remote RST, etc.) don't surface as Node's uncaught 'error' event and crash
+    // the daemon between sync ticks. We drop our reference to the dead client so
+    // the next connect() call rebuilds a fresh one.
+    client.on('error', (err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`IMAP "${this.name}" async error: ${message} (will reconnect on next use)`);
+      if (this.client === client) {
+        this.client = undefined;
+        this.currentFolder = undefined;
+      }
+    });
     await client.connect();
     this.client = client;
     this.currentFolder = undefined;
