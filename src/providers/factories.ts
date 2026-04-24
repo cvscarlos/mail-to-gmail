@@ -9,10 +9,7 @@ import { GmailImapDestination } from './destination/GmailImapDestination.js';
 import { ImapSource } from './source/ImapSource.js';
 import { ZohoMailApiSource } from './source/ZohoMailApiSource.js';
 
-export function createSource(
-  source: SourceConfig,
-  logger: Logger
-): ZohoMailApiSource | ImapSource {
+export function createSource(source: SourceConfig, logger: Logger): ZohoMailApiSource | ImapSource {
   if (source.type === 'zoho-api') {
     const creds = resolveZohoCreds(source.credentialsPrefix, source.name);
     return new ZohoMailApiSource({

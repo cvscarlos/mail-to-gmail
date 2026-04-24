@@ -14,7 +14,7 @@
 
 destinations:
   - name: gmail-1
-    credentialsPrefix: GMAIL_1       # → GMAIL_1_EMAIL, GMAIL_1_APP_PASSWORD
+    credentialsPrefix: GMAIL_1 # → GMAIL_1_EMAIL, GMAIL_1_APP_PASSWORD
 
   - name: gmail-2
     credentialsPrefix: GMAIL_2
@@ -23,7 +23,7 @@ sources:
   # Zoho Mail (Free plan compatible — uses Zoho's HTTP API, not IMAP).
   - name: zoho-main
     type: zoho-api
-    credentialsPrefix: ZOHO_MAIN     # → ZOHO_MAIN_DC, ZOHO_MAIN_CLIENT_ID, …
+    credentialsPrefix: ZOHO_MAIN # → ZOHO_MAIN_DC, ZOHO_MAIN_CLIENT_ID, …
     destination: gmail-1
     schedule:
       intervalMinutes: 5
@@ -34,7 +34,7 @@ sources:
   - name: yahoo-personal
     type: imap
     preset: yahoo
-    credentialsPrefix: YAHOO_PERSONAL   # → YAHOO_PERSONAL_EMAIL, YAHOO_PERSONAL_APP_PASSWORD
+    credentialsPrefix: YAHOO_PERSONAL # → YAHOO_PERSONAL_EMAIL, YAHOO_PERSONAL_APP_PASSWORD
     destination: gmail-2
     idle: true
     schedule: { intervalMinutes: 10, lookbackDays: 1, maxMessagesPerRun: 100 }

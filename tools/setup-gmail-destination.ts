@@ -1,18 +1,10 @@
 import { ImapFlow } from 'imapflow';
 import chalk from 'chalk';
-import inquirer from 'inquirer';
+import { input, password } from '@inquirer/prompts';
 import { appendEnvKeys, hasDuplicate, loadYamlConfig, saveYamlConfig } from './wizardUtils.js';
 
 const CONFIG_PATH = process.env.CONFIG_PATH ?? './config.yaml';
 const ENV_PATH = './.env';
-
-interface PromptAnswers {
-  name: string;
-  credentialsPrefix: string;
-  email: string;
-  appPassword: string;
-  mailbox: string;
-}
 
 async function testConnection(email: string, appPassword: string, mailbox: string): Promise<void> {
   const client = new ImapFlow({
@@ -34,6 +26,10 @@ async function testConnection(email: string, appPassword: string, mailbox: strin
   await client.logout();
 }
 
+function isPromptAborted(err: unknown): boolean {
+  return err instanceof Error && err.name === 'ExitPromptError';
+}
+
 async function run(): Promise<void> {
   console.warn(chalk.bold.blue('\n— Add Gmail destination wizard —\n'));
   console.warn(
@@ -44,59 +40,40 @@ async function run(): Promise<void> {
 
   const existing = loadYamlConfig(CONFIG_PATH);
 
-  let answers: PromptAnswers;
-  try {
-    answers = await inquirer.prompt<PromptAnswers>([
-      {
-        type: 'input',
-        name: 'name',
-        message: 'Destination name (lowercase + hyphens, e.g. gmail-1):',
-        validate: (v: string) => /^[a-z][a-z0-9-]*$/.test(v) || 'lowercase alphanumeric + hyphens',
-      },
-      {
-        type: 'input',
-        name: 'credentialsPrefix',
-        message: 'Credentials env prefix (uppercase, e.g. GMAIL_1):',
-        validate: (v: string) => /^[A-Z][A-Z0-9_]*$/.test(v) || 'uppercase + underscores + digits',
-      },
-      {
-        type: 'input',
-        name: 'email',
-        message: 'Gmail address:',
-        validate: (v: string) => /@gmail\.com$|@googlemail\.com$|@/.test(v) || 'must be an email',
-      },
-      {
-        type: 'password',
-        name: 'appPassword',
-        message: 'Gmail app password (16 chars, no spaces):',
-        mask: '*',
-        validate: (v: string) => v.length >= 16 || 'app passwords are typically 16 characters',
-      },
-      {
-        type: 'input',
-        name: 'mailbox',
-        message: 'Target mailbox (label):',
-        default: 'INBOX',
-      },
-    ]);
-  } catch (err) {
-    if (err instanceof Error && err.message.includes('force closed')) {
-      console.warn(chalk.yellow('\nAborted by user'));
-      process.exit(0);
-    }
-    throw err;
-  }
+  const label = await input({
+    message: 'Label for this Gmail account (e.g., "main", "work"):',
+    default: 'main',
+    validate: (v) =>
+      /^[a-z][a-z0-9-]*$/.test(v) || 'lowercase alphanumeric + hyphens, must start with a letter',
+  });
 
-  if (hasDuplicate(existing.destinations as Array<{ name?: string }>, answers.name)) {
-    console.error(
-      chalk.red(`A destination named "${answers.name}" already exists in ${CONFIG_PATH}`)
-    );
+  const name = `gmail-${label}`;
+  const credentialsPrefix = name.toUpperCase().replace(/-/g, '_');
+
+  if (hasDuplicate(existing.destinations as Array<{ name?: string }>, name)) {
+    console.error(chalk.red(`A destination named "${name}" already exists in ${CONFIG_PATH}`));
     process.exit(1);
   }
 
+  const email = await input({
+    message: 'Gmail address:',
+    validate: (v) => v.includes('@') || 'must be an email address',
+  });
+
+  const appPassword = await password({
+    message: 'Gmail app password (16 chars, no spaces):',
+    mask: '*',
+    validate: (v) => v.length >= 16 || 'app passwords are typically 16 characters',
+  });
+
+  const mailbox = await input({
+    message: 'Target mailbox label (where messages land):',
+    default: 'INBOX',
+  });
+
   console.warn(chalk.blue('\nTesting Gmail IMAP connection…'));
   try {
-    await testConnection(answers.email, answers.appPassword, answers.mailbox);
+    await testConnection(email, appPassword, mailbox);
     console.warn(chalk.green('✓ Gmail IMAP connection OK'));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -105,21 +82,25 @@ async function run(): Promise<void> {
   }
 
   existing.destinations.push({
-    name: answers.name,
-    credentialsPrefix: answers.credentialsPrefix,
-    mailbox: answers.mailbox,
+    name,
+    credentialsPrefix,
+    mailbox,
   });
   saveYamlConfig(CONFIG_PATH, existing);
-  console.warn(chalk.green(`✓ Added destination "${answers.name}" to ${CONFIG_PATH}`));
+  console.warn(chalk.green(`✓ Added destination "${name}" to ${CONFIG_PATH}`));
 
   appendEnvKeys(ENV_PATH, [
-    { key: `${answers.credentialsPrefix}_EMAIL`, value: answers.email },
-    { key: `${answers.credentialsPrefix}_APP_PASSWORD`, value: answers.appPassword },
+    { key: `${credentialsPrefix}_EMAIL`, value: email },
+    { key: `${credentialsPrefix}_APP_PASSWORD`, value: appPassword },
   ]);
-  console.warn(chalk.green(`✓ Added ${answers.credentialsPrefix}_* secrets to ${ENV_PATH}`));
+  console.warn(chalk.green(`✓ Added ${credentialsPrefix}_* secrets to ${ENV_PATH}`));
 }
 
 run().catch((err: unknown) => {
+  if (isPromptAborted(err)) {
+    console.warn(chalk.yellow('\nAborted by user'));
+    process.exit(0);
+  }
   const message = err instanceof Error ? err.message : String(err);
   console.error(chalk.red(`Fatal: ${message}`));
   process.exit(1);

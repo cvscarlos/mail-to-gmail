@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
+import { createInterface } from 'node:readline/promises';
 import { Command } from 'commander';
-import inquirer from 'inquirer';
 import lockfile from 'proper-lockfile';
 import { getDestination, loadAppConfig } from './config/appConfig.js';
 import { SqliteStateStore } from './core/StateStore.js';
@@ -210,17 +210,21 @@ program
     }
 
     if (!opts.yes) {
-      const { confirmed } = await inquirer.prompt<{ confirmed: boolean }>([
-        {
-          type: 'confirm',
-          name: 'confirmed',
-          message: `Reset checkpoint + seen_messages for "${sourceName}"? This cannot be undone.`,
-          default: false,
-        },
-      ]);
-      if (!confirmed) {
-        logger.info('Aborted');
-        return;
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      try {
+        const answer = (
+          await rl.question(
+            `Reset checkpoint + seen_messages for "${sourceName}"? This cannot be undone. [y/N] `
+          )
+        )
+          .trim()
+          .toLowerCase();
+        if (answer !== 'y' && answer !== 'yes') {
+          logger.info('Aborted');
+          return;
+        }
+      } finally {
+        rl.close();
       }
     }
 

@@ -1,6 +1,6 @@
 import axios, { type AxiosError } from 'axios';
 import chalk from 'chalk';
-import inquirer from 'inquirer';
+import { input, password, select } from '@inquirer/prompts';
 
 interface EnvDefaults {
   dc?: string;
@@ -86,8 +86,7 @@ async function exchangeCodeForTokens(answers: Answers): Promise<TokenResponse> {
 }
 
 function isPromptAborted(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
-  return err.name === 'ExitPromptError' || err.message.includes('force closed');
+  return err instanceof Error && err.name === 'ExitPromptError';
 }
 
 async function run(): Promise<void> {
@@ -101,61 +100,45 @@ async function run(): Promise<void> {
 
   const { defaults, maskedSecret } = readEnvDefaults();
 
-  let answers: Answers;
-  try {
-    const firstRound = await inquirer.prompt<Omit<Answers, 'code'>>([
-      {
-        type: 'list',
-        name: 'dc',
-        message: 'Zoho data center:',
-        choices: ['com', 'eu', 'in', 'com.au', 'com.cn'],
-        default: defaults.dc ?? 'com',
-      },
-      {
-        type: 'input',
-        name: 'credentialsPrefix',
-        message: 'Credentials env prefix (e.g. ZOHO_MAIN):',
-        default: defaults.credentialsPrefix ?? 'ZOHO_MAIN',
-        validate: (v: string) => /^[A-Z][A-Z0-9_]*$/.test(v) || 'uppercase + underscores + digits',
-      },
-      {
-        type: 'input',
-        name: 'clientId',
-        message: 'Client ID:',
-        default: defaults.clientId,
-        validate: (v: string) => v.length > 0 || 'required',
-      },
-      {
-        type: 'password',
-        name: 'clientSecret',
-        message: defaults.clientSecret
-          ? `Client secret (blank to keep ${chalk.cyan(maskedSecret)}):`
-          : 'Client secret:',
-        mask: '*',
-        validate: (v: string) =>
-          (defaults.clientSecret && v.length === 0) || v.length > 0 || 'required',
-      },
-    ]);
-    const { code } = await inquirer.prompt<{ code: string }>([
-      {
-        type: 'input',
-        name: 'code',
-        message: 'Authorization code (expires in minutes):',
-        validate: (v: string) => v.length > 0 || 'required',
-      },
-    ]);
-    answers = {
-      ...firstRound,
-      clientSecret: firstRound.clientSecret || (defaults.clientSecret ?? ''),
-      code,
-    };
-  } catch (err) {
-    if (isPromptAborted(err)) {
-      console.warn(chalk.yellow('\nAborted by user'));
-      process.exit(0);
-    }
-    throw err;
-  }
+  const dc: string = await select({
+    message: 'Zoho data center:',
+    choices: [
+      { name: 'com (United States / global)', value: 'com' },
+      { name: 'eu (Europe)', value: 'eu' },
+      { name: 'in (India)', value: 'in' },
+      { name: 'com.au (Australia)', value: 'com.au' },
+      { name: 'com.cn (China)', value: 'com.cn' },
+    ],
+    default: defaults.dc ?? 'com',
+  });
+
+  const credentialsPrefix = await input({
+    message: 'Credentials env prefix (e.g. ZOHO_MAIN):',
+    default: defaults.credentialsPrefix ?? 'ZOHO_MAIN',
+    validate: (v) => /^[A-Z][A-Z0-9_]*$/.test(v) || 'uppercase + underscores + digits',
+  });
+
+  const clientId = await input({
+    message: 'Client ID:',
+    default: defaults.clientId,
+    validate: (v) => v.length > 0 || 'required',
+  });
+
+  const clientSecretInput = await password({
+    message: defaults.clientSecret
+      ? `Client secret (blank to keep ${chalk.cyan(maskedSecret)}):`
+      : 'Client secret:',
+    mask: '*',
+    validate: (v) => (defaults.clientSecret && v.length === 0) || v.length > 0 || 'required',
+  });
+  const clientSecret = clientSecretInput || (defaults.clientSecret ?? '');
+
+  const code = await input({
+    message: 'Authorization code (expires in minutes):',
+    validate: (v) => v.length > 0 || 'required',
+  });
+
+  const answers: Answers = { dc, credentialsPrefix, clientId, clientSecret, code };
 
   console.warn(chalk.blue('\nExchanging code for tokens…'));
   try {
@@ -192,6 +175,10 @@ async function run(): Promise<void> {
 }
 
 run().catch((err: unknown) => {
+  if (isPromptAborted(err)) {
+    console.warn(chalk.yellow('\nAborted by user'));
+    process.exit(0);
+  }
   const message = err instanceof Error ? err.message : String(err);
   console.error(chalk.red(`Fatal: ${message}`));
   process.exit(1);

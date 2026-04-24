@@ -1,31 +1,17 @@
 import { ImapFlow } from 'imapflow';
 import chalk from 'chalk';
-import inquirer from 'inquirer';
+import { confirm, input, password, select } from '@inquirer/prompts';
 import { appendEnvKeys, hasDuplicate, loadYamlConfig, saveYamlConfig } from './wizardUtils.js';
 
 const CONFIG_PATH = process.env.CONFIG_PATH ?? './config.yaml';
 const ENV_PATH = './.env';
 
-const PRESETS: Record<string, { host: string; port: number; tls: boolean }> = {
+type Provider = 'yahoo' | 'outlook' | 'custom';
+
+const PRESETS: Record<Exclude<Provider, 'custom'>, { host: string; port: number; tls: boolean }> = {
   yahoo: { host: 'imap.mail.yahoo.com', port: 993, tls: true },
   outlook: { host: 'outlook.office365.com', port: 993, tls: true },
 };
-
-interface PromptAnswers {
-  name: string;
-  preset: 'yahoo' | 'outlook' | 'custom';
-  host?: string;
-  port?: number;
-  tls?: boolean;
-  credentialsPrefix: string;
-  email: string;
-  appPassword: string;
-  destination: string;
-  intervalMinutes: number;
-  lookbackDays: number;
-  idle: boolean;
-  idleFolder: string;
-}
 
 async function testConnection(
   host: string,
@@ -46,8 +32,19 @@ async function testConnection(
   await client.logout();
 }
 
+function isPromptAborted(err: unknown): boolean {
+  // @inquirer/prompts throws a named ExitPromptError on Ctrl+C / Ctrl+D.
+  return err instanceof Error && err.name === 'ExitPromptError';
+}
+
+function validateLabel(v: string): string | boolean {
+  return (
+    /^[a-z][a-z0-9-]*$/.test(v) || 'lowercase alphanumeric + hyphens, must start with a letter'
+  );
+}
+
 async function run(): Promise<void> {
-  console.warn(chalk.bold.blue('\n— Add IMAP source wizard —\n'));
+  console.warn(chalk.bold.blue('\n— Add email source wizard —\n'));
 
   const existing = loadYamlConfig(CONFIG_PATH);
   const destinationChoices = existing.destinations
@@ -65,123 +62,105 @@ async function run(): Promise<void> {
     process.exit(1);
   }
 
-  let answers: PromptAnswers;
-  try {
-    answers = await inquirer.prompt<PromptAnswers>([
-      {
-        type: 'input',
-        name: 'name',
-        message: 'Source name (lowercase + hyphens, e.g. yahoo-personal):',
-        validate: (v: string) => /^[a-z][a-z0-9-]*$/.test(v) || 'lowercase alphanumeric + hyphens',
-      },
-      {
-        type: 'list',
-        name: 'preset',
-        message: 'IMAP preset:',
-        choices: [
-          { name: 'Yahoo (imap.mail.yahoo.com:993)', value: 'yahoo' },
-          { name: 'Outlook.com / Hotmail (outlook.office365.com:993)', value: 'outlook' },
-          { name: 'Custom host/port', value: 'custom' },
-        ],
-      },
-      {
-        type: 'input',
-        name: 'host',
-        message: 'IMAP host:',
-        when: (a: Partial<PromptAnswers>) => a.preset === 'custom',
-      },
-      {
-        type: 'number',
-        name: 'port',
-        message: 'IMAP port:',
-        default: 993,
-        when: (a: Partial<PromptAnswers>) => a.preset === 'custom',
-      },
-      {
-        type: 'confirm',
-        name: 'tls',
-        message: 'Use TLS (implicit)?',
-        default: true,
-        when: (a: Partial<PromptAnswers>) => a.preset === 'custom',
-      },
-      {
-        type: 'input',
-        name: 'credentialsPrefix',
-        message: 'Credentials env prefix (uppercase, e.g. YAHOO_PERSONAL):',
-        validate: (v: string) => /^[A-Z][A-Z0-9_]*$/.test(v) || 'uppercase + underscores + digits',
-      },
-      {
-        type: 'input',
-        name: 'email',
-        message: 'Email address:',
-        validate: (v: string) => v.includes('@') || 'must be an email address',
-      },
-      {
-        type: 'password',
-        name: 'appPassword',
-        message: 'App password (not your account password):',
-        mask: '*',
-        validate: (v: string) => v.length > 0 || 'app password is required',
-      },
-      {
-        type: 'list',
-        name: 'destination',
-        message: 'Gmail destination:',
-        choices: destinationChoices,
-      },
-      {
-        type: 'number',
-        name: 'intervalMinutes',
-        message: 'Poll interval (minutes):',
-        default: 10,
-      },
-      {
-        type: 'number',
-        name: 'lookbackDays',
-        message: 'Initial lookback (days):',
-        default: 1,
-      },
-      {
-        type: 'confirm',
-        name: 'idle',
-        message: 'Enable IMAP IDLE for push detection?',
-        default: true,
-      },
-      {
-        type: 'input',
-        name: 'idleFolder',
-        message: 'Folder to watch with IDLE:',
-        default: 'INBOX',
-        when: (a: Partial<PromptAnswers>) => a.idle === true,
-      },
-    ]);
-  } catch (err) {
-    if (err instanceof Error && err.message.includes('force closed')) {
-      console.warn(chalk.yellow('\nAborted by user'));
-      process.exit(0);
-    }
-    throw err;
-  }
+  const provider: Provider = await select({
+    message: 'Which email provider are you connecting?',
+    choices: [
+      { name: 'Yahoo Mail', value: 'yahoo' },
+      { name: 'Outlook.com / Hotmail', value: 'outlook' },
+      { name: 'Other (custom IMAP server)', value: 'custom' },
+    ],
+  });
 
-  if (hasDuplicate(existing.sources as Array<{ name?: string }>, answers.name)) {
-    console.error(chalk.red(`A source named "${answers.name}" already exists in ${CONFIG_PATH}`));
+  const label: string = await input({
+    message:
+      provider === 'custom'
+        ? 'Source name (lowercase + hyphens, e.g. fastmail-personal):'
+        : 'Label for this account (e.g., "personal", "work"):',
+    default: provider === 'custom' ? undefined : 'personal',
+    validate: validateLabel,
+  });
+
+  const sourceName = provider === 'custom' ? label : `${provider}-${label}`;
+  const credentialsPrefix = sourceName.toUpperCase().replace(/-/g, '_');
+
+  if (hasDuplicate(existing.sources as Array<{ name?: string }>, sourceName)) {
+    console.error(chalk.red(`A source named "${sourceName}" already exists in ${CONFIG_PATH}`));
     process.exit(1);
   }
 
-  const endpoint =
-    answers.preset === 'custom'
-      ? { host: answers.host!, port: answers.port!, tls: answers.tls ?? true }
-      : PRESETS[answers.preset];
+  let host: string | undefined;
+  let port: number | undefined;
+  let tls: boolean | undefined;
+  if (provider === 'custom') {
+    host = await input({
+      message: 'IMAP server hostname (e.g., imap.fastmail.com):',
+      validate: (v) => v.length > 0 || 'hostname required',
+    });
+    const portAnswer = await input({
+      message: 'IMAP port:',
+      default: '993',
+      validate: (v) =>
+        (Number.isInteger(Number(v)) && Number(v) > 0) || 'must be a positive integer',
+    });
+    port = Number(portAnswer);
+    tls = await confirm({
+      message: 'Use TLS (recommended)?',
+      default: true,
+    });
+  }
 
-  console.warn(chalk.blue('\nTesting connection…'));
+  const email = await input({
+    message: 'Email address:',
+    validate: (v) => v.includes('@') || 'must be an email address',
+  });
+
+  const appPassword = await password({
+    message: 'App password (not your regular account password):',
+    mask: '*',
+    validate: (v) => v.length > 0 || 'app password is required',
+  });
+
+  const destination =
+    destinationChoices.length === 1
+      ? destinationChoices[0]
+      : await select({
+          message: 'Which Gmail destination should this sync into?',
+          choices: destinationChoices.map((c) => ({ name: c, value: c })),
+        });
+
+  const intervalAnswer = await input({
+    message: 'Poll interval (minutes):',
+    default: '10',
+    validate: (v) => (Number.isInteger(Number(v)) && Number(v) > 0) || 'must be a positive integer',
+  });
+  const intervalMinutes = Number(intervalAnswer);
+
+  const lookbackAnswer = await input({
+    message: 'On first run, how far back should we reach for existing mail? (days)',
+    default: '1',
+    validate: (v) =>
+      (Number.isInteger(Number(v)) && Number(v) >= 0) || 'must be a non-negative integer',
+  });
+  const lookbackDays = Number(lookbackAnswer);
+
+  const idle = await confirm({
+    message: 'Enable instant-delivery mode (IMAP IDLE)?',
+    default: true,
+  });
+
+  const idleFolder = idle
+    ? await input({
+        message: 'Which folder should push-detect new mail?',
+        default: 'INBOX',
+      })
+    : undefined;
+
+  const endpoint =
+    provider === 'custom' ? { host: host!, port: port!, tls: tls ?? true } : PRESETS[provider];
+
+  console.warn(chalk.blue(`\nTesting connection to ${endpoint.host}:${endpoint.port}…`));
   try {
-    await testConnection(
-      endpoint.host,
-      endpoint.port,
-      endpoint.tls,
-      answers.email,
-      answers.appPassword
-    );
+    await testConnection(endpoint.host, endpoint.port, endpoint.tls, email, appPassword);
     console.warn(chalk.green('✓ IMAP connection OK'));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -190,42 +169,46 @@ async function run(): Promise<void> {
   }
 
   const sourceEntry: Record<string, unknown> = {
-    name: answers.name,
+    name: sourceName,
     enabled: true,
     type: 'imap',
-    credentialsPrefix: answers.credentialsPrefix,
-    destination: answers.destination,
-    idle: answers.idle,
+    credentialsPrefix,
+    destination,
+    idle,
     schedule: {
-      intervalMinutes: answers.intervalMinutes,
-      lookbackDays: answers.lookbackDays,
+      intervalMinutes,
+      lookbackDays,
       maxMessagesPerRun: 100,
     },
     filter: {},
   };
-  if (answers.preset === 'custom') {
-    sourceEntry.host = answers.host;
-    sourceEntry.port = answers.port;
-    sourceEntry.tls = answers.tls ?? true;
+  if (provider === 'custom') {
+    sourceEntry.host = host;
+    sourceEntry.port = port;
+    sourceEntry.tls = tls ?? true;
   } else {
-    sourceEntry.preset = answers.preset;
+    sourceEntry.preset = provider;
   }
-  if (answers.idle) {
-    sourceEntry.idleFolder = answers.idleFolder;
+  if (idle && idleFolder) {
+    sourceEntry.idleFolder = idleFolder;
   }
 
   existing.sources.push(sourceEntry);
   saveYamlConfig(CONFIG_PATH, existing);
-  console.warn(chalk.green(`✓ Added source "${answers.name}" to ${CONFIG_PATH}`));
+  console.warn(chalk.green(`✓ Added source "${sourceName}" to ${CONFIG_PATH}`));
 
   appendEnvKeys(ENV_PATH, [
-    { key: `${answers.credentialsPrefix}_EMAIL`, value: answers.email },
-    { key: `${answers.credentialsPrefix}_APP_PASSWORD`, value: answers.appPassword },
+    { key: `${credentialsPrefix}_EMAIL`, value: email },
+    { key: `${credentialsPrefix}_APP_PASSWORD`, value: appPassword },
   ]);
-  console.warn(chalk.green(`✓ Added ${answers.credentialsPrefix}_* secrets to ${ENV_PATH}`));
+  console.warn(chalk.green(`✓ Added ${credentialsPrefix}_* secrets to ${ENV_PATH}`));
 }
 
 run().catch((err: unknown) => {
+  if (isPromptAborted(err)) {
+    console.warn(chalk.yellow('\nAborted by user'));
+    process.exit(0);
+  }
   const message = err instanceof Error ? err.message : String(err);
   console.error(chalk.red(`Fatal: ${message}`));
   process.exit(1);
