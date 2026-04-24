@@ -105,7 +105,7 @@ export class SyncScheduler {
       if (!(provider instanceof ImapSource)) continue;
 
       provider.setIdleHandler(source.idleFolder, (sourceName) => {
-        this.logger.info(`IDLE wake: ${sourceName}`);
+        this.logger.info(`[${sourceName}] IDLE wake`);
         this.nextDueAt.set(sourceName, Date.now());
         this.wake();
       });
@@ -114,7 +114,7 @@ export class SyncScheduler {
         await provider.startIdleWatch();
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        this.logger.warn(`IDLE watch failed for "${source.name}": ${message}`);
+        this.logger.warn(`[${source.name}] IDLE watch failed: ${message}`);
       }
     }
   }
@@ -146,7 +146,7 @@ export class SyncScheduler {
         // Delete-sync is best-effort and independent of forward ingestion.
         // Log and continue — do not trip the forward-sync backoff.
         const message = err instanceof Error ? err.message : String(err);
-        this.logger.error(`[delete-sync][${source.name}] pass failed: ${message}`);
+        this.logger.error(`[${source.name}] delete-sync: pass failed: ${message}`);
       }
       this.backoffMs.delete(source.name);
       this.nextDueAt.set(source.name, Date.now() + source.schedule.intervalMinutes * 60_000);
@@ -157,7 +157,7 @@ export class SyncScheduler {
       this.backoffMs.set(source.name, next);
       this.nextDueAt.set(source.name, Date.now() + next);
       this.logger.error(
-        `Source "${source.name}" failed: ${message}. Retrying in ${Math.round(next / 1000)}s`
+        `[${source.name}] sync failed: ${message}. Retrying in ${Math.round(next / 1000)}s`
       );
     } finally {
       if (isIdleCapable && provider instanceof ImapSource) {
@@ -165,7 +165,7 @@ export class SyncScheduler {
           await provider.startIdleWatch();
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          this.logger.warn(`IDLE restart failed for "${source.name}": ${message}`);
+          this.logger.warn(`[${source.name}] IDLE restart failed: ${message}`);
         }
       }
     }
@@ -190,21 +190,21 @@ export class SyncScheduler {
   }
 
   private async shutdownAll(): Promise<void> {
-    for (const [, provider] of this.sources) {
+    for (const [name, provider] of this.sources) {
       if (provider instanceof ImapSource) provider.stopIdleWatch();
       try {
         await provider.disconnect();
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        this.logger.warn(`Source disconnect error: ${message}`);
+        this.logger.warn(`[${name}] source disconnect error: ${message}`);
       }
     }
-    for (const [, provider] of this.destinations) {
+    for (const [name, provider] of this.destinations) {
       try {
         await provider.disconnect();
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        this.logger.warn(`Destination disconnect error: ${message}`);
+        this.logger.warn(`[${name}] destination disconnect error: ${message}`);
       }
     }
     this.sources.clear();

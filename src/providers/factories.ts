@@ -40,6 +40,7 @@ export function createDestination(
 ): GmailImapDestination {
   const creds = resolveGmailImapCreds(destination.credentialsPrefix, destination.name);
   return new GmailImapDestination({
+    name: destination.name,
     email: creds.email,
     appPassword: creds.appPassword,
     logger,

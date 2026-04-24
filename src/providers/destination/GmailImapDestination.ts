@@ -17,6 +17,8 @@ import {
 import { getHeader, parseMessageId } from '../../core/mimeUtils.js';
 
 export interface GmailConfig {
+  /** Destination name from config.yaml (e.g. `gmail-main`). Used in log lines. */
+  name: string;
   email: string;
   appPassword: string;
   logger: Logger;
@@ -40,7 +42,7 @@ const SPAM_FOLDER = '[Gmail]/Spam';
 const DELETION_SCAN_FOLDERS = [TRASH_FOLDER, SPAM_FOLDER] as const;
 
 export class GmailImapDestination implements DestinationProvider {
-  public readonly name = 'gmail-imap';
+  public readonly name: string;
   private readonly config: GmailConfig;
   private readonly logger: Logger;
   private readonly lru: LRUCache<string, true>;
@@ -49,6 +51,7 @@ export class GmailImapDestination implements DestinationProvider {
 
   constructor(config: GmailConfig) {
     this.config = config;
+    this.name = config.name;
     this.logger = config.logger;
     this.lru = new LRUCache<string, true>({ max: LRU_MAX });
   }
@@ -57,13 +60,13 @@ export class GmailImapDestination implements DestinationProvider {
     if (this.client?.usable) return;
 
     if (this.client) {
-      this.logger.info('Gmail IMAP connection is stale — discarding and reconnecting');
+      this.logger.info(`[${this.name}] connection is stale — discarding and reconnecting`);
       try {
         await this.client.logout();
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.logger.info(
-          `Gmail stale-client logout failed (socket likely already closed): ${message}`
+          `[${this.name}] stale-client logout failed (socket likely already closed): ${message}`
         );
       }
       this.client = undefined;
@@ -83,7 +86,7 @@ export class GmailImapDestination implements DestinationProvider {
     // the next connect() call rebuilds a fresh one.
     client.on('error', (err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
-      this.logger.warn(`Gmail IMAP async error: ${message} (will reconnect on next use)`);
+      this.logger.warn(`[${this.name}] async error: ${message} (will reconnect on next use)`);
       if (this.client === client) {
         this.client = undefined;
         this.allMailPath = undefined;
@@ -100,7 +103,7 @@ export class GmailImapDestination implements DestinationProvider {
       await this.client.logout();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      this.logger.info(`Gmail logout failed (socket likely already closed): ${message}`);
+      this.logger.info(`[${this.name}] logout failed (socket likely already closed): ${message}`);
     }
     this.client = undefined;
     this.allMailPath = undefined;
@@ -164,7 +167,7 @@ export class GmailImapDestination implements DestinationProvider {
         await this.client!.mailboxOpen(folder);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        this.logger.info(`Gmail delete-sync: cannot open ${folder}: ${message}`);
+        this.logger.info(`[${this.name}] delete-sync: cannot open ${folder}: ${message}`);
         continue;
       }
 
@@ -200,7 +203,7 @@ export class GmailImapDestination implements DestinationProvider {
         if (!gmailMsgId) {
           // Without a stable Gmail ID we can't track restoration; skip.
           this.logger.debug(
-            `Gmail delete-sync: skipping UID ${uid} in ${folder} (no emailId/X-GM-MSGID)`
+            `[${this.name}] delete-sync: skipping UID ${uid} in ${folder} (no emailId/X-GM-MSGID)`
           );
           continue;
         }

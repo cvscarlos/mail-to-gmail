@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { createRequire } from 'node:module';
 import { createInterface } from 'node:readline/promises';
 import { Command } from 'commander';
 import lockfile from 'proper-lockfile';
@@ -11,11 +12,15 @@ import { createDestination, createSource } from './providers/factories.js';
 import { loadAppEnv } from './utils/config.js';
 import { createLogger } from './utils/logger.js';
 
+// Resolve package.json at runtime so `--version` and the startup log line both
+// reflect the currently-installed version without requiring a rebuild step.
+const pkg = createRequire(import.meta.url)('../package.json') as { version: string };
+
 const program = new Command();
 program
   .name('mail-to-gmail')
   .description('Self-hosted sync from Zoho / Yahoo / Outlook mailboxes into Gmail accounts')
-  .version('2.0.0');
+  .version(pkg.version);
 
 // Rationale + trade-offs documented in DESIGN.md → "Retention and cleanup".
 const SEEN_MESSAGES_RETENTION_DAYS = 90;
@@ -111,6 +116,7 @@ program
   .action(async (opts: { source?: string; once?: boolean; dryRun?: boolean }) => {
     const env = loadAppEnv();
     const logger = createLogger(env.APP_LOG_LEVEL);
+    logger.info(`mail-to-gmail v${pkg.version} starting (node ${process.version})`);
     const appConfig = loadAppConfig(env.CONFIG_PATH);
     const state = new SqliteStateStore(env.STATE_DB_PATH);
 
@@ -168,7 +174,7 @@ program
 
     const source = appConfig.sources.find((s) => s.name === name);
     if (!source) {
-      logger.error(`Unknown source: "${name}"`);
+      logger.error(`[${name}] unknown source`);
       process.exit(1);
     }
 
@@ -177,17 +183,17 @@ program
     const destinationProvider = createDestination(destinationConfig, logger);
 
     try {
-      logger.info(`Connecting source "${source.name}"…`);
+      logger.info(`[${source.name}] connecting source…`);
       await sourceProvider.connect();
-      logger.info('✓ source connected');
+      logger.info(`[${source.name}] ✓ source connected`);
 
-      logger.info(`Connecting destination "${destinationConfig.name}"…`);
+      logger.info(`[${destinationConfig.name}] connecting destination…`);
       await destinationProvider.connect();
       await destinationProvider.ensureReady();
-      logger.info('✓ destination ready');
+      logger.info(`[${destinationConfig.name}] ✓ destination ready`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      logger.error(`Connection failed: ${message}`);
+      logger.error(`[${source.name}] connection failed: ${message}`);
       process.exitCode = 1;
     } finally {
       await sourceProvider.disconnect().catch(() => {});
@@ -205,7 +211,7 @@ program
     const appConfig = loadAppConfig(env.CONFIG_PATH);
 
     if (!appConfig.sources.some((s) => s.name === sourceName)) {
-      logger.error(`Unknown source: "${sourceName}"`);
+      logger.error(`[${sourceName}] unknown source`);
       process.exit(1);
     }
 
@@ -238,7 +244,7 @@ program
 
     try {
       await state.resetSource(sourceName);
-      logger.info(`✓ Reset "${sourceName}"`);
+      logger.info(`[${sourceName}] ✓ reset`);
     } finally {
       await release();
       state.close();

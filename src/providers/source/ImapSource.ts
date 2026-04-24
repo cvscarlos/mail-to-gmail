@@ -128,13 +128,13 @@ export class ImapSource implements SourceProvider {
     if (this.client?.usable) return;
 
     if (this.client) {
-      this.logger.info(`IMAP "${this.name}" connection is stale — discarding and reconnecting`);
+      this.logger.info(`[${this.name}] connection is stale — discarding and reconnecting`);
       try {
         await this.client.logout();
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.logger.info(
-          `IMAP "${this.name}" stale-client logout failed (socket likely already closed): ${message}`
+          `[${this.name}] stale-client logout failed (socket likely already closed): ${message}`
         );
       }
       this.client = undefined;
@@ -154,7 +154,7 @@ export class ImapSource implements SourceProvider {
     // the next connect() call rebuilds a fresh one.
     client.on('error', (err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
-      this.logger.warn(`IMAP "${this.name}" async error: ${message} (will reconnect on next use)`);
+      this.logger.warn(`[${this.name}] async error: ${message} (will reconnect on next use)`);
       if (this.client === client) {
         this.client = undefined;
         this.currentFolder = undefined;
@@ -171,9 +171,7 @@ export class ImapSource implements SourceProvider {
       await this.client.logout();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      this.logger.info(
-        `IMAP "${this.name}" logout failed (socket likely already closed): ${message}`
-      );
+      this.logger.info(`[${this.name}] logout failed (socket likely already closed): ${message}`);
     }
     this.client = undefined;
     this.currentFolder = undefined;
@@ -245,11 +243,11 @@ export class ImapSource implements SourceProvider {
     const { folderPath, uid } = decodeMessageId(ref.id);
     const trashPath = await this.findTrashPath();
     if (!trashPath) {
-      throw new Error(`IMAP "${this.name}" has no \\Trash folder; cannot move UID ${uid}`);
+      throw new Error(`[${this.name}] has no \\Trash folder; cannot move UID ${uid}`);
     }
     if (trashPath === folderPath) {
       this.logger.debug(
-        `IMAP "${this.name}" UID ${uid} already in Trash (${folderPath}); skipping move`
+        `[${this.name}] UID ${uid} already in Trash (${folderPath}); skipping move`
       );
       return;
     }
@@ -269,13 +267,13 @@ export class ImapSource implements SourceProvider {
   public async restoreMessage(ref: RestoreRef): Promise<void> {
     if (!ref.rfcMessageId) {
       throw new Error(
-        `IMAP "${this.name}" cannot restore without an RFC Message-ID (sourceMessageId=${ref.sourceMessageId})`
+        `[${this.name}] cannot restore without an RFC Message-ID (sourceMessageId=${ref.sourceMessageId})`
       );
     }
     await this.connect();
     const trashPath = await this.findTrashPath();
     if (!trashPath) {
-      throw new Error(`IMAP "${this.name}" has no \\Trash folder; cannot restore`);
+      throw new Error(`[${this.name}] has no \\Trash folder; cannot restore`);
     }
     await this.client!.mailboxOpen(trashPath);
     this.currentFolder = undefined;
@@ -290,7 +288,7 @@ export class ImapSource implements SourceProvider {
     const uids = Array.isArray(searchResult) ? searchResult : [];
     if (uids.length === 0) {
       throw new Error(
-        `IMAP "${this.name}" found no message with Message-ID "${ref.rfcMessageId}" in ${trashPath}`
+        `[${this.name}] found no message with Message-ID "${ref.rfcMessageId}" in ${trashPath}`
       );
     }
     await this.client!.messageMove(uids.map(String).join(','), 'INBOX', { uid: true });

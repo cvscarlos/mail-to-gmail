@@ -70,12 +70,17 @@ export class SyncEngine {
 
   public async run(options: SyncRunOptions = {}): Promise<void> {
     const { abort, dryRun = false } = options;
-    const tag = dryRun ? '[DRY RUN] ' : '';
     const sourceName = this.sourceConfig.name;
     const { schedule, filter } = this.sourceConfig;
+    // Every log line produced by this run is prefixed with `[source-name] ` so
+    // operators can grep a single source's activity across multiplexed output.
+    // Dry-run modality lives inside the message body, not the prefix, to keep
+    // the grep pattern stable across real and dry runs.
+    const prefix = `[${sourceName}] `;
+    const dryTag = dryRun ? '[DRY RUN] ' : '';
 
     this.logger.info(
-      `${tag}Starting sync: ${sourceName} → ${this.destinationConfig.name} (${this.destinationConfig.mailbox})`
+      `${prefix}${dryTag}Starting sync → ${this.destinationConfig.name} (${this.destinationConfig.mailbox})`
     );
 
     await this.source.connect();
@@ -87,7 +92,7 @@ export class SyncEngine {
       const lookbackStart = new Date(Date.now() - schedule.lookbackDays * 86_400_000);
       checkpoint = { lastReceivedAt: lookbackStart.toISOString() };
       this.logger.info(
-        `${tag}No checkpoint for "${sourceName}". Using lookback of ${schedule.lookbackDays} day(s) → ${checkpoint.lastReceivedAt}`
+        `${prefix}No checkpoint. Using lookback of ${schedule.lookbackDays} day(s) → ${checkpoint.lastReceivedAt}`
       );
     }
 
@@ -97,7 +102,7 @@ export class SyncEngine {
       excludeFolders: this.sourceConfig.excludeFolders,
       fetchListId: wantsListId,
     });
-    this.logger.info(`${tag}${sourceName}: ${candidates.length} candidate(s)`);
+    this.logger.info(`${prefix}${candidates.length} candidate(s)`);
 
     const latestCheckpoint: SyncCheckpoint = { ...checkpoint };
     let processed = 0;
@@ -109,11 +114,11 @@ export class SyncEngine {
 
     for (const msg of candidates) {
       if (abort?.aborted) {
-        this.logger.info(`${tag}Abort signal received — stopping mid-run`);
+        this.logger.info(`${prefix}Abort signal received — stopping mid-run`);
         break;
       }
       if (processed >= schedule.maxMessagesPerRun) {
-        this.logger.info(`${tag}Hit maxMessagesPerRun=${schedule.maxMessagesPerRun}; stopping`);
+        this.logger.info(`${prefix}Hit maxMessagesPerRun=${schedule.maxMessagesPerRun}; stopping`);
         break;
       }
       processed++;
@@ -121,20 +126,20 @@ export class SyncEngine {
       try {
         if (!matchesMetadataFilter(filter, msg, false)) {
           filtered++;
-          this.logger.debug(`${tag}Filtered out by metadata: ${msg.id} (${msg.subject ?? ''})`);
+          this.logger.debug(`${prefix}Filtered out by metadata: ${msg.id} (${msg.subject ?? ''})`);
           continue;
         }
 
         if (await this.state.hasSeen(sourceName, msg.id)) {
           skipped++;
-          this.logger.debug(`${tag}Already seen locally: ${msg.id}`);
+          this.logger.debug(`${prefix}Already seen locally: ${msg.id}`);
           continue;
         }
 
         await pRetry(
           async () => {
             this.logger.info(
-              `${tag}${sourceName} [${processed}/${candidates.length}]: ${msg.id} — ${msg.subject ?? ''}`
+              `${prefix}[${processed}/${candidates.length}] ${msg.id} — ${msg.subject ?? ''}`
             );
 
             const rawMime = await this.source.fetchRawMessage({
@@ -148,7 +153,7 @@ export class SyncEngine {
 
             if (!matchesMetadataFilter(filter, msg, true)) {
               filtered++;
-              this.logger.debug(`${tag}Filtered out by list-id (post-fetch): ${msg.id}`);
+              this.logger.debug(`${prefix}Filtered out by list-id (post-fetch): ${msg.id}`);
               return;
             }
 
@@ -156,7 +161,7 @@ export class SyncEngine {
 
             if (await this.state.hasSeen(sourceName, msg.id, contentHash)) {
               skipped++;
-              this.logger.info(`${tag}Duplicate content-hash skipped: ${msg.id}`);
+              this.logger.info(`${prefix}Duplicate content-hash skipped: ${msg.id}`);
               return;
             }
 
@@ -169,14 +174,14 @@ export class SyncEngine {
             if (existsInDest) {
               dedupedViaGmail++;
               this.logger.info(
-                `${tag}Already in destination (Gmail-side dedup): ${msg.id} msgId=${rfcMessageId ?? 'none'}`
+                `${prefix}Already in destination (Gmail-side dedup): ${msg.id} msgId=${rfcMessageId ?? 'none'}`
               );
               if (!dryRun) await this.recordSeen(msg, contentHash);
               return;
             }
 
             if (dryRun) {
-              this.logger.info(`${tag}Would APPEND: ${msg.id} — ${msg.subject ?? ''}`);
+              this.logger.info(`${prefix}${dryTag}Would APPEND: ${msg.id} — ${msg.subject ?? ''}`);
             } else {
               const withHash = injectHeader(rawMime, CONTENT_HASH_HEADER, contentHash);
               const withSource = injectHeader(withHash, SOURCE_NAME_HEADER, sourceName);
@@ -204,7 +209,7 @@ export class SyncEngine {
             retries: dryRun ? 0 : 3,
             onFailedAttempt: (err) => {
               this.logger.warn(
-                `${tag}Attempt ${err.attemptNumber} failed for ${msg.id}: ${err.error.message}`
+                `${prefix}Attempt ${err.attemptNumber} failed for ${msg.id}: ${err.error.message}`
               );
             },
           }
@@ -212,17 +217,17 @@ export class SyncEngine {
       } catch (err) {
         errors++;
         const message = err instanceof Error ? err.message : String(err);
-        this.logger.error(`${tag}Failed to sync ${msg.id}: ${message}`);
+        this.logger.error(`${prefix}Failed to sync ${msg.id}: ${message}`);
       }
     }
 
     if (!dryRun && latestCheckpoint.lastReceivedAt !== checkpoint.lastReceivedAt) {
       await this.state.saveCheckpoint(sourceName, latestCheckpoint);
-      this.logger.info(`${tag}Checkpoint → ${JSON.stringify(latestCheckpoint)}`);
+      this.logger.info(`${prefix}Checkpoint → ${JSON.stringify(latestCheckpoint)}`);
     }
 
     this.logger.info(
-      `${tag}${sourceName} done: imported=${imported} skipped=${skipped} filtered=${filtered} gmail-dedup=${dedupedViaGmail} errors=${errors}`
+      `${prefix}done: imported=${imported} skipped=${skipped} filtered=${filtered} gmail-dedup=${dedupedViaGmail} errors=${errors}`
     );
   }
 
@@ -251,11 +256,11 @@ export class SyncEngine {
     const cfg = this.sourceConfig.deleteSync;
 
     if (!cfg.enabled) {
-      this.logger.debug(`[delete-sync][${sourceName}] disabled; skipping`);
+      this.logger.debug(`[${sourceName}] delete-sync: disabled; skipping`);
       return;
     }
 
-    const tag = `[delete-sync][${sourceName}]${dryRun ? ' [DRY RUN]' : ''} `;
+    const tag = `[${sourceName}] delete-sync:${dryRun ? ' [DRY RUN]' : ''} `;
 
     await this.destination.connect();
     const candidates = await this.destination.listPropagatableDeletions(sourceName);
@@ -327,7 +332,7 @@ export class SyncEngine {
 
     if (!cfg.enabled) return;
 
-    const tag = `[delete-sync][${sourceName}] (restore)${dryRun ? ' [DRY RUN]' : ''} `;
+    const tag = `[${sourceName}] delete-sync (restore):${dryRun ? ' [DRY RUN]' : ''} `;
 
     const tombstones = await this.state.listPropagatedTombstones(sourceName);
     if (tombstones.length === 0) {
