@@ -72,10 +72,8 @@ export class SyncEngine {
     const { abort, dryRun = false } = options;
     const sourceName = this.sourceConfig.name;
     const { schedule, filter } = this.sourceConfig;
-    // Every log line produced by this run is prefixed with `[source-name] ` so
-    // operators can grep a single source's activity across multiplexed output.
-    // Dry-run modality lives inside the message body, not the prefix, to keep
-    // the grep pattern stable across real and dry runs.
+    // Dry-run tag lives in the message body, not the prefix, so a single grep
+    // on `[source-name]` catches both real and dry-run lines for that source.
     const prefix = `[${sourceName}] `;
     const dryTag = dryRun ? '[DRY RUN] ' : '';
 
@@ -384,7 +382,6 @@ export class SyncEngine {
           await this.state.removePropagatedTombstone(t.gmailMsgId);
           continue;
         }
-        // state === 'restored'
         if (dryRun) {
           this.logger.info(
             `${tag}would restore source message: sourceId=${t.sourceMessageId} rfcId=${t.rfcMessageId}`
