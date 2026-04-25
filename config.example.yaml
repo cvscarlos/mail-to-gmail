@@ -9,41 +9,76 @@
 # Secrets (API keys, app passwords) live in .env, keyed by credentialsPrefix.
 # Copy this file to config.yaml and edit in place.
 #
-# This file shows the minimum needed to get started; see the "Full config
-# reference" in README.md for every available field and its default.
+# Every line tagged `# default` shows the schema's default — you can safely
+# delete those lines and the loader will fill them in. Untagged values are
+# either required (name, type, credentialsPrefix, destination, schedule)
+# or intentional overrides (idle: true on Yahoo/Outlook).
+# See README.md for the "Delete sync" feature explanation.
 
 destinations:
   - name: gmail-1
     credentialsPrefix: GMAIL_1 # → GMAIL_1_EMAIL, GMAIL_1_APP_PASSWORD
+    mailbox: INBOX # default
 
   - name: gmail-2
     credentialsPrefix: GMAIL_2
+    mailbox: INBOX # default
 
 sources:
   # Zoho Mail (Free plan compatible — uses Zoho's HTTP API, not IMAP).
   - name: zoho-main
+    enabled: true # default
     type: zoho-api
     credentialsPrefix: ZOHO_MAIN # → ZOHO_MAIN_DC, ZOHO_MAIN_CLIENT_ID, …
     destination: gmail-1
+    folders: ['*'] # default
+    excludeFolders: ['Spam', 'Trash'] # default
+    idle: false # default — must be false for zoho-api
     schedule:
       intervalMinutes: 5
       lookbackDays: 1
       maxMessagesPerRun: 100
+    filter: {} # default
+    deleteSync:
+      enabled: false # default
+      maxPropagationsPerRun: 10 # default
 
   # Yahoo — IMAP + app password (preset fills host/port/tls).
   - name: yahoo-personal
+    enabled: true # default
     type: imap
     preset: yahoo
     credentialsPrefix: YAHOO_PERSONAL # → YAHOO_PERSONAL_EMAIL, YAHOO_PERSONAL_APP_PASSWORD
     destination: gmail-2
+    folders: ['*'] # default
+    excludeFolders: ['Spam', 'Trash'] # default
     idle: true
-    schedule: { intervalMinutes: 10, lookbackDays: 1, maxMessagesPerRun: 100 }
+    idleFolder: INBOX # default
+    schedule:
+      intervalMinutes: 10
+      lookbackDays: 1
+      maxMessagesPerRun: 100
+    filter: {} # default
+    deleteSync:
+      enabled: false # default
+      maxPropagationsPerRun: 10 # default
 
   # Personal outlook.com / hotmail — IMAP + app password.
   - name: outlook-personal
+    enabled: true # default
     type: imap
     preset: outlook
     credentialsPrefix: OUTLOOK_PERSONAL
     destination: gmail-2
+    folders: ['*'] # default
+    excludeFolders: ['Spam', 'Trash'] # default
     idle: true
-    schedule: { intervalMinutes: 10, lookbackDays: 1, maxMessagesPerRun: 100 }
+    idleFolder: INBOX # default
+    schedule:
+      intervalMinutes: 10
+      lookbackDays: 1
+      maxMessagesPerRun: 100
+    filter: {} # default
+    deleteSync:
+      enabled: false # default
+      maxPropagationsPerRun: 10 # default

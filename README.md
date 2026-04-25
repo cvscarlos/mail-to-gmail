@@ -154,6 +154,12 @@ sources:
       lookbackDays: 1
       maxMessagesPerRun: 100
     filter: {}
+
+    # Optional: mirror Gmail-side deletions back to the source. See "Delete sync"
+    # below for the full behavior and safety rails.
+    deleteSync:
+      enabled: false # default: false — opt-in
+      maxPropagationsPerRun: 10 # default: 10 — safety cap per reconciliation pass
 ```
 
 ## Environment variables
@@ -202,6 +208,43 @@ schedule:
   maxMessagesPerRun: 100 # processing cap per iteration
 ```
 
+## Delete sync (optional, off by default)
+
+When enabled per source, deletions in Gmail are mirrored back to the source's own Trash. Restoring a Gmail-side message back to your inbox triggers a matching restore on the source.
+
+```yaml
+sources:
+  - name: yahoo-main
+    # ... rest of the source config
+    deleteSync:
+      enabled: false # default: false — opt-in
+      maxPropagationsPerRun: 10 # default: 10 — per-pass safety cap
+```
+
+| Field                   | Default | Behavior                                                                                                                                  |
+| ----------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`               | `false` | Master switch. When false, the source is never touched.                                                                                   |
+| `maxPropagationsPerRun` | `10`    | Hard cap on how many source-side moves a single reconcile pass will perform. Anything beyond is deferred to the next run with a warn log. |
+
+**Dry-run** is controlled by the daemon-level `DRY_RUN=true` env var (the same switch the forward sync uses). Recommended for the first pass after enabling — logs intended moves, no source-side writes.
+
+**What it does:**
+
+- Scans `[Gmail]/Trash` and `[Gmail]/Spam` for messages we previously imported (identified by their `X-M2G-Source` / `X-M2G-Source-ID` / `X-M2G-Content-Hash` headers).
+- For each match: moves the corresponding source message to the source's own `\Trash` (IMAP) or via the provider's move-to-trash API (Zoho).
+- Marks the Gmail copy with the `mail-to-gmail-propagated` label so subsequent passes skip it.
+- Tracks every propagation in a small SQLite table; on the next pass, checks whether the user restored the Gmail message — if so, moves the source copy back to source `INBOX`.
+
+**Safety properties:**
+
+- **Off by default** — shipping does not change behavior for existing setups.
+- **Soft-delete only** — the source move is to Trash, never EXPUNGE. Recoverable for ~30 days on the source side too.
+- **Fail-safe** — if Gmail Trash is emptied or the account is wiped, there's nothing for the pass to find, so source copies are preserved.
+- **Per-run cap** — `maxPropagationsPerRun` bounds the damage of any single anomalous run.
+- **Only acts on messages imported by mail-to-gmail post-upgrade.** Pre-existing imports (POP3, manual, Gmailify) lack the M2G headers and are invisible to delete-sync forever — see DESIGN.md §10 for why.
+
+See [`DESIGN.md`](./DESIGN.md) §10 "Delete sync" for the full decision table, restoration logic, and known sharp edges.
+
 ## CLI
 
 ```bash
@@ -233,13 +276,17 @@ The Dockerfile streams the GitHub tarball through `tar` (no `git` binary install
 
 ## Deduplication and database loss
 
-Before every APPEND, the daemon injects this header into the raw MIME:
+Before every APPEND, the daemon injects three headers into the raw MIME:
 
 ```
-X-M2G-Content-Hash: <sha256>
+X-M2G-Content-Hash: <sha256-of-raw-mime>
+X-M2G-Source:       <source-name>            e.g. yahoo-main
+X-M2G-Source-ID:    <percent-encoded-id>     e.g. INBOX%00307180
 ```
 
-It then asks Gmail via `X-GM-RAW` whether a message with the same `Message-ID` **or** content hash already exists. If Gmail finds a match, the append is skipped.
+The daemon then asks Gmail via `X-GM-RAW` whether a message with the same `Message-ID` **or** content hash already exists. If Gmail finds a match, the append is skipped.
+
+The two `X-M2G-Source*` headers are not used for dedup itself — they tag every imported message so the optional Delete sync feature can later identify "messages we own" inside Gmail Trash / Spam. They're harmless if you never enable delete-sync.
 
 SQLite is a **cache**, not the deduplication authority. Wipe `mail-to-gmail.db` and the daemon re-walks `lookbackDays` of source mail; Gmail search answers "already have this" for every previously-imported message, so nothing is duplicated.
 
