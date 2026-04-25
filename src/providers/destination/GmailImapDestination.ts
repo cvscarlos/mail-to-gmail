@@ -187,11 +187,14 @@ export class GmailImapDestination implements DestinationProvider {
         continue;
       }
 
+      // `in:anywhere` is required: Gmail's default X-GM-RAW scope silently
+      // excludes Trash and Spam, so without it the search returns 0 even when
+      // we've SELECTed the Trash folder. (Same pattern as checkRestoration.)
       // Two distinct header-shaped tokens ANDed — Gmail's X-GM-RAW is full-text so a
       // user-forwarded message quoting one of these strings in the body could match,
       // but crafting a body that contains both as valid-looking headers is infeasible.
       // The post-fetch getHeader() check below enforces they are *actual* headers.
-      const query = `"${SOURCE_NAME_HEADER}:${sourceName}" "${CONTENT_HASH_HEADER}:" -label:${PROPAGATED_LABEL}`;
+      const query = `"${SOURCE_NAME_HEADER}:${sourceName}" "${CONTENT_HASH_HEADER}:" -label:${PROPAGATED_LABEL} in:anywhere`;
       const uids = await this.gmailRawSearch(query);
       if (uids.length === 0) continue;
 
