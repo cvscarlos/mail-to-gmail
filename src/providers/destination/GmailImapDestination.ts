@@ -178,6 +178,9 @@ export class GmailImapDestination implements DestinationProvider {
     // whatever localized name Gmail gave them (e.g. `[Gmail]/Lixeira` for pt-BR).
     // Dedupe in case both fall back to the same path on a misconfigured server.
     const folders = [...new Set([await this.findTrashPath(), await this.findSpamPath()])];
+    this.logger.info(
+      `[${this.name}] delete-sync: scanning [${folders.join(', ')}] for source=${sourceName}`
+    );
     for (const folder of folders) {
       try {
         await this.client!.mailboxOpen(folder);
@@ -196,46 +199,60 @@ export class GmailImapDestination implements DestinationProvider {
       // The post-fetch getHeader() check below enforces they are *actual* headers.
       const query = `"${SOURCE_NAME_HEADER}:${sourceName}" "${CONTENT_HASH_HEADER}:" -label:${PROPAGATED_LABEL} in:anywhere`;
       const uids = await this.gmailRawSearch(query);
-      if (uids.length === 0) continue;
+      const rawCount = uids.length;
+      let validCount = 0;
 
-      const fetchQuery = {
-        uid: true,
-        emailId: true,
-        headers: [SOURCE_NAME_HEADER, SOURCE_MESSAGE_ID_HEADER, CONTENT_HASH_HEADER, 'Message-ID'],
-      } as Parameters<ImapFlow['fetch']>[1];
+      if (rawCount > 0) {
+        const fetchQuery = {
+          uid: true,
+          emailId: true,
+          headers: [
+            SOURCE_NAME_HEADER,
+            SOURCE_MESSAGE_ID_HEADER,
+            CONTENT_HASH_HEADER,
+            'Message-ID',
+          ],
+        } as Parameters<ImapFlow['fetch']>[1];
 
-      for await (const msg of this.client!.fetch(uids, fetchQuery, {
-        uid: true,
-      }) as AsyncIterable<FetchMessageObject>) {
-        const headers = msg.headers;
-        if (!headers) continue;
-        const buf = Buffer.isBuffer(headers) ? headers : Buffer.from(String(headers), 'latin1');
-        const srcName = getHeader(buf, SOURCE_NAME_HEADER);
-        const srcIdEncoded = getHeader(buf, SOURCE_MESSAGE_ID_HEADER);
-        const contentHash = getHeader(buf, CONTENT_HASH_HEADER);
-        // All M2G markers must be present as real headers for this to be one of ours.
-        if (!srcName || !srcIdEncoded || !contentHash) continue;
-        if (srcName !== sourceName) continue;
-        const uid = typeof msg.uid === 'number' ? msg.uid : Number(msg.uid);
-        if (!Number.isFinite(uid)) continue;
-        const gmailMsgId = typeof msg.emailId === 'string' ? msg.emailId : undefined;
-        if (!gmailMsgId) {
-          // Without a stable Gmail ID we can't track restoration; skip.
-          this.logger.debug(
-            `[${this.name}] delete-sync: skipping UID ${uid} in ${folder} (no emailId/X-GM-MSGID)`
-          );
-          continue;
+        for await (const msg of this.client!.fetch(uids, fetchQuery, {
+          uid: true,
+        }) as AsyncIterable<FetchMessageObject>) {
+          const headers = msg.headers;
+          if (!headers) continue;
+          const buf = Buffer.isBuffer(headers) ? headers : Buffer.from(String(headers), 'latin1');
+          const srcName = getHeader(buf, SOURCE_NAME_HEADER);
+          const srcIdEncoded = getHeader(buf, SOURCE_MESSAGE_ID_HEADER);
+          const contentHash = getHeader(buf, CONTENT_HASH_HEADER);
+          // All M2G markers must be present as real headers for this to be one of ours.
+          if (!srcName || !srcIdEncoded || !contentHash) continue;
+          if (srcName !== sourceName) continue;
+          const uid = typeof msg.uid === 'number' ? msg.uid : Number(msg.uid);
+          if (!Number.isFinite(uid)) continue;
+          const gmailMsgId = typeof msg.emailId === 'string' ? msg.emailId : undefined;
+          if (!gmailMsgId) {
+            this.logger.info(
+              `[${this.name}] delete-sync: skipping UID ${uid} in ${folder} (no emailId/X-GM-MSGID)`
+            );
+            continue;
+          }
+          const rfcMessageId = parseMessageId(buf);
+          results.push({
+            folder,
+            uid,
+            sourceName: srcName,
+            sourceIdEncoded: srcIdEncoded,
+            gmailMsgId,
+            rfcMessageId,
+          });
+          validCount++;
         }
-        const rfcMessageId = parseMessageId(buf);
-        results.push({
-          folder,
-          uid,
-          sourceName: srcName,
-          sourceIdEncoded: srcIdEncoded,
-          gmailMsgId,
-          rfcMessageId,
-        });
       }
+
+      // Always log per-folder counts. raw=X-GM-RAW hits, valid=passed post-fetch
+      // header validation. A `raw>0 valid=0` gap is a different bug than `raw=0`.
+      this.logger.info(
+        `[${this.name}] delete-sync: ${folder} → raw=${rawCount} valid=${validCount}`
+      );
     }
 
     return results;
