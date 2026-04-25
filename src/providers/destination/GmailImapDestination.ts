@@ -27,6 +27,7 @@ export interface GmailConfig {
 interface MailboxListEntry {
   path?: string;
   specialUse?: string;
+  flags?: Set<string> | string[];
 }
 
 interface CurrentMailbox {
@@ -36,10 +37,12 @@ interface CurrentMailbox {
 const GMAIL_IMAP_HOST = 'imap.gmail.com';
 const GMAIL_IMAP_PORT = 993;
 const LRU_MAX = 5_000;
+// Fallback IMAP paths, used only if the IMAP server doesn't advertise the
+// corresponding RFC 6154 special-use flag. Real-world Gmail localizes these
+// (e.g. `[Gmail]/Lixeira` for pt-BR), so we always prefer special-use discovery.
 const ALL_MAIL_FALLBACK = '[Gmail]/All Mail';
-const TRASH_FOLDER = '[Gmail]/Trash';
-const SPAM_FOLDER = '[Gmail]/Spam';
-const DELETION_SCAN_FOLDERS = [TRASH_FOLDER, SPAM_FOLDER] as const;
+const TRASH_FALLBACK = '[Gmail]/Trash';
+const SPAM_FALLBACK = '[Gmail]/Spam';
 
 export class GmailImapDestination implements DestinationProvider {
   public readonly name: string;
@@ -48,6 +51,8 @@ export class GmailImapDestination implements DestinationProvider {
   private readonly lru: LRUCache<string, true>;
   private client?: ImapFlow;
   private allMailPath?: string;
+  private trashPath?: string;
+  private spamPath?: string;
 
   constructor(config: GmailConfig) {
     this.config = config;
@@ -71,6 +76,8 @@ export class GmailImapDestination implements DestinationProvider {
       }
       this.client = undefined;
       this.allMailPath = undefined;
+      this.trashPath = undefined;
+      this.spamPath = undefined;
     }
 
     const client = new ImapFlow({
@@ -87,14 +94,17 @@ export class GmailImapDestination implements DestinationProvider {
     client.on('error', (err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.warn(`[${this.name}] async error: ${message} (will reconnect on next use)`);
-      if (this.client === client) {
-        this.client = undefined;
-        this.allMailPath = undefined;
-      }
+      if (this.client !== client) return;
+      this.client = undefined;
+      this.allMailPath = undefined;
+      this.trashPath = undefined;
+      this.spamPath = undefined;
     });
     await client.connect();
     this.client = client;
     this.allMailPath = undefined;
+    this.trashPath = undefined;
+    this.spamPath = undefined;
   }
 
   public async disconnect(): Promise<void> {
@@ -107,6 +117,8 @@ export class GmailImapDestination implements DestinationProvider {
     }
     this.client = undefined;
     this.allMailPath = undefined;
+    this.trashPath = undefined;
+    this.spamPath = undefined;
   }
 
   public async ensureReady(): Promise<void> {
@@ -162,7 +174,11 @@ export class GmailImapDestination implements DestinationProvider {
     await this.connect();
     const results: PropagatableDeletion[] = [];
 
-    for (const folder of DELETION_SCAN_FOLDERS) {
+    // Resolve Trash + Spam paths via IMAP special-use flags so we follow
+    // whatever localized name Gmail gave them (e.g. `[Gmail]/Lixeira` for pt-BR).
+    // Dedupe in case both fall back to the same path on a misconfigured server.
+    const folders = [...new Set([await this.findTrashPath(), await this.findSpamPath()])];
+    for (const folder of folders) {
       try {
         await this.client!.mailboxOpen(folder);
       } catch (err) {
@@ -194,7 +210,7 @@ export class GmailImapDestination implements DestinationProvider {
         const srcName = getHeader(buf, SOURCE_NAME_HEADER);
         const srcIdEncoded = getHeader(buf, SOURCE_MESSAGE_ID_HEADER);
         const contentHash = getHeader(buf, CONTENT_HASH_HEADER);
-        // All three markers must be present as real headers for this to be one of ours.
+        // All M2G markers must be present as real headers for this to be one of ours.
         if (!srcName || !srcIdEncoded || !contentHash) continue;
         if (srcName !== sourceName) continue;
         const uid = typeof msg.uid === 'number' ? msg.uid : Number(msg.uid);
@@ -257,16 +273,39 @@ export class GmailImapDestination implements DestinationProvider {
 
   private async findAllMail(): Promise<string> {
     if (this.allMailPath) return this.allMailPath;
+    this.allMailPath = await this.findFolderBySpecialUse('\\All', ALL_MAIL_FALLBACK);
+    return this.allMailPath;
+  }
+
+  private async findTrashPath(): Promise<string> {
+    if (this.trashPath) return this.trashPath;
+    this.trashPath = await this.findFolderBySpecialUse('\\Trash', TRASH_FALLBACK);
+    return this.trashPath;
+  }
+
+  private async findSpamPath(): Promise<string> {
+    if (this.spamPath) return this.spamPath;
+    this.spamPath = await this.findFolderBySpecialUse('\\Junk', SPAM_FALLBACK);
+    return this.spamPath;
+  }
+
+  private async findFolderBySpecialUse(useFlag: string, fallback: string): Promise<string> {
     if (!this.client) throw new Error('GmailImapDestination: not connected');
     const boxes = (await this.client.list()) as MailboxListEntry[];
     for (const box of boxes) {
-      if (box.specialUse === '\\All' && typeof box.path === 'string') {
-        this.allMailPath = box.path;
+      if (typeof box.path !== 'string') continue;
+      // ImapFlow normally surfaces the special-use flag on `specialUse`, but some
+      // server/version combos expose it only via the `flags` Set. Check both.
+      const flagInSet =
+        box.flags instanceof Set ? box.flags.has(useFlag) : box.flags?.includes(useFlag);
+      if (box.specialUse === useFlag || flagInSet) {
         return box.path;
       }
     }
-    this.allMailPath = ALL_MAIL_FALLBACK;
-    return this.allMailPath;
+    this.logger.warn(
+      `[${this.name}] no IMAP folder advertises ${useFlag}; falling back to ${fallback}`
+    );
+    return fallback;
   }
 
   private async selectAllMailReadOnly(): Promise<void> {
