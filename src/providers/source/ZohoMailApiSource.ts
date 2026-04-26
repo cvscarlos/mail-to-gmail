@@ -3,6 +3,7 @@ import {
   type ListOptions,
   type MessageMetadata,
   type MessageRef,
+  type RestoreOutcome,
   type RestoreRef,
   type SourceProvider,
   type SyncCheckpoint,
@@ -165,7 +166,7 @@ export class ZohoMailApiSource implements SourceProvider {
     }
   }
 
-  public async restoreMessage(ref: RestoreRef): Promise<void> {
+  public async restoreMessage(ref: RestoreRef): Promise<RestoreOutcome> {
     const accountId = await this.getAccountId();
     const inboxFolderId = await this.getInboxFolderId(accountId);
     const url = `https://mail.zoho.${this.config.dc}/api/accounts/${accountId}/updatemessage`;
@@ -175,6 +176,7 @@ export class ZohoMailApiSource implements SourceProvider {
         destfolderid: inboxFolderId,
         messageId: [ref.sourceMessageId],
       });
+      return 'restored';
     } catch (err) {
       throw axiosErrorDetails(err, `Zoho moveToFolder(Inbox) failed for ${ref.sourceMessageId}`);
     }

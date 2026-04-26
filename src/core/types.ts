@@ -13,6 +13,12 @@ export interface MessageMetadata {
 export interface MessageRef {
   id: string;
   folderId?: string;
+  /**
+   * Optional RFC 5322 Message-ID. When present, IMAP source providers can fall
+   * back to a Message-ID HEADER search if the encoded UID has gone stale
+   * (e.g. after a move-out-and-back round-trip on the source side).
+   */
+  rfcMessageId?: string;
 }
 
 export interface SyncCheckpoint {
@@ -37,6 +43,16 @@ export interface RestoreRef {
   sourceMessageId: string;
 }
 
+/**
+ * Outcome of a source-side restore attempt.
+ * - `restored`: the message was successfully moved out of source Trash back to INBOX.
+ * - `not-in-trash`: the source no longer has the message in Trash (auto-classified to
+ *   Spam/Bulk, expired, or otherwise gone). Tombstone should be dropped — there's
+ *   nothing to act on.
+ * Genuine errors (network, auth, transient) still throw.
+ */
+export type RestoreOutcome = 'restored' | 'not-in-trash';
+
 export interface SourceProvider {
   name: string;
   connect(): Promise<void>;
@@ -57,7 +73,7 @@ export interface SourceProvider {
    * Called by delete-sync when a user restores a Gmail tombstone and we want to
    * mirror the restoration on the source side.
    */
-  restoreMessage(ref: RestoreRef): Promise<void>;
+  restoreMessage(ref: RestoreRef): Promise<RestoreOutcome>;
 }
 
 /**
@@ -107,11 +123,20 @@ export interface DestinationProvider {
    */
   markPropagated(ref: { folder: string; uid: number }): Promise<void>;
   /**
-   * Given a previously-propagated message's RFC Message-ID, determine whether it's
-   * still in Trash/Spam, has been restored (moved back into All Mail), or has been
-   * permanently deleted from the destination account.
+   * Remove the propagated marker after a successful source-side restore. Without
+   * this, a second delete on the destination would be silently filtered out by
+   * `listPropagatableDeletions` (which excludes already-marked messages), so the
+   * round-trip delete → restore → delete cycle would only propagate the first
+   * deletion.
    */
-  checkRestoration(rfcMessageId: string): Promise<RestorationState>;
+  unmarkPropagated(gmailMsgId: string): Promise<void>;
+  /**
+   * Given a previously-propagated message's stable destination-side ID
+   * (Gmail's X-GM-MSGID), determine whether it's still in Trash/Spam, has
+   * been restored (moved back into All Mail), or has been permanently deleted
+   * from the destination account.
+   */
+  checkRestoration(gmailMsgId: string): Promise<RestorationState>;
 }
 
 export interface PropagatedTombstoneRecord {

@@ -179,14 +179,14 @@ export class GmailImapDestination implements DestinationProvider {
     // Dedupe in case both fall back to the same path on a misconfigured server.
     const folders = [...new Set([await this.findTrashPath(), await this.findSpamPath()])];
     this.logger.info(
-      `[${this.name}] delete-sync: scanning [${folders.join(', ')}] for source=${sourceName}`
+      `[${this.name}] delete-sync → scanning [${folders.join(', ')}] for source=${sourceName}`
     );
     for (const folder of folders) {
       try {
         await this.client!.mailboxOpen(folder);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        this.logger.info(`[${this.name}] delete-sync: cannot open ${folder}: ${message}`);
+        this.logger.info(`[${this.name}] delete-sync → cannot open ${folder}: ${message}`);
         continue;
       }
 
@@ -234,7 +234,7 @@ export class GmailImapDestination implements DestinationProvider {
           const gmailMsgId = typeof msg.emailId === 'string' ? msg.emailId : undefined;
           if (!gmailMsgId) {
             this.logger.info(
-              `[${this.name}] delete-sync: skipping UID ${uid} in ${folder} (no emailId/X-GM-MSGID)`
+              `[${this.name}] delete-sync → skipping UID ${uid} in ${folder} (no emailId/X-GM-MSGID)`
             );
             continue;
           }
@@ -254,7 +254,7 @@ export class GmailImapDestination implements DestinationProvider {
       // Always log per-folder counts. raw=X-GM-RAW hits, valid=passed post-fetch
       // header validation. A `raw>0 valid=0` gap is a different bug than `raw=0`.
       this.logger.info(
-        `[${this.name}] delete-sync: ${folder} → raw=${rawCount} valid=${validCount}`
+        `[${this.name}] delete-sync → ${folder}: raw=${rawCount} valid=${validCount}`
       );
     }
 
@@ -267,23 +267,47 @@ export class GmailImapDestination implements DestinationProvider {
     await this.client!.messageFlagsAdd({ uid: String(ref.uid) }, [PROPAGATED_LABEL], { uid: true });
   }
 
-  public async checkRestoration(rfcMessageId: string): Promise<RestorationState> {
+  public async unmarkPropagated(gmailMsgId: string): Promise<void> {
     await this.connect();
-    await this.selectAllMailReadOnly();
+    // SELECT All Mail (read-write) — the restored copy lives there since
+    // [Gmail]/All Mail excludes Trash/Spam by Gmail's own semantics.
+    const allMail = await this.findAllMail();
+    await this.client!.mailboxOpen(allMail);
+    const result = await this.client!.search({ emailId: gmailMsgId }, { uid: true });
+    const uids = Array.isArray(result) ? result : [];
+    if (uids.length === 0) {
+      this.logger.debug(
+        `[${this.name}] unmarkPropagated: emailId ${gmailMsgId} not found in ${allMail}`
+      );
+      return;
+    }
+    await this.client!.messageFlagsRemove(uids.map(String).join(','), [PROPAGATED_LABEL], {
+      uid: true,
+    });
+  }
 
-    // Two Gmail searches, both scoped via X-GM-RAW:
-    //  1. anywhere-count = message present *anywhere* in the account (incl. Trash/Spam)
-    //  2. normal-count   = message present *outside* Trash/Spam (default X-GM-RAW scope)
-    // Decision table:
-    //   anywhere == 0          → hard-deleted
-    //   normal   > 0           → restored (user moved it out of Trash)
-    //   else                   → still in-trash-or-spam
-    const quoted = rfcMessageId.replace(/"/g, '\\"');
-    const anywhere = await this.gmailRawSearch(`rfc822msgid:${quoted} in:anywhere`);
-    if (anywhere.length === 0) return 'hard-deleted';
-    const normal = await this.gmailRawSearch(`rfc822msgid:${quoted}`);
-    if (normal.length > 0) return 'restored';
-    return 'in-trash-or-spam';
+  public async checkRestoration(gmailMsgId: string): Promise<RestorationState> {
+    await this.connect();
+
+    // [Gmail]/All Mail excludes Trash and Spam by Gmail's own definition, so
+    // a hit there means the user moved the message back out of Trash/Spam.
+    await this.selectAllMailReadOnly();
+    if ((await this.searchByEmailId(gmailMsgId)).length > 0) return 'restored';
+
+    // Otherwise, look in Trash then Spam. ImapFlow's `emailId` criterion maps
+    // to X-GM-MSGID on Gmail, which is stable across folder moves.
+    for (const folder of [await this.findTrashPath(), await this.findSpamPath()]) {
+      await this.client!.mailboxOpen(folder, { readOnly: true });
+      if ((await this.searchByEmailId(gmailMsgId)).length > 0) return 'in-trash-or-spam';
+    }
+
+    return 'hard-deleted';
+  }
+
+  private async searchByEmailId(emailId: string): Promise<number[]> {
+    if (!this.client) throw new Error('GmailImapDestination: not connected');
+    const result = await this.client.search({ emailId }, { uid: true });
+    return Array.isArray(result) ? result : [];
   }
 
   private async gmailRawSearch(rawQuery: string): Promise<number[]> {

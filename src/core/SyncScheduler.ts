@@ -146,7 +146,7 @@ export class SyncScheduler {
         // Delete-sync is best-effort and independent of forward ingestion.
         // Log and continue — do not trip the forward-sync backoff.
         const message = err instanceof Error ? err.message : String(err);
-        this.logger.error(`[${source.name}] delete-sync: pass failed: ${message}`);
+        this.logger.error(`[${source.name}] delete-sync → pass failed: ${message}`);
       }
       this.backoffMs.delete(source.name);
       this.nextDueAt.set(source.name, Date.now() + source.schedule.intervalMinutes * 60_000);

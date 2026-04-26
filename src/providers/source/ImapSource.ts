@@ -4,6 +4,7 @@ import {
   type Logger,
   type MessageMetadata,
   type MessageRef,
+  type RestoreOutcome,
   type RestoreRef,
   type SourceProvider,
   type SyncCheckpoint,
@@ -253,7 +254,29 @@ export class ImapSource implements SourceProvider {
     }
     // messageMove requires the source folder selected in read-write mode.
     await this.client!.mailboxOpen(folderPath);
-    await this.client!.messageMove(String(uid), trashPath, { uid: true });
+    const moveResult = await this.client!.messageMove(String(uid), trashPath, { uid: true });
+    const movedCount = moveResult && moveResult.uidMap ? moveResult.uidMap.size : 0;
+
+    if (movedCount === 0) {
+      // The encoded UID has gone stale — typical when the source message went
+      // through a Trash → INBOX restore round-trip and got a fresh UID. Fall
+      // back to a Message-ID search if we have one.
+      if (!ref.rfcMessageId) {
+        throw new Error(
+          `[${this.name}] cannot delete: UID ${uid} not present in ${folderPath} and no Message-ID provided for fallback`
+        );
+      }
+      const uids = await this.searchByMessageId(folderPath, ref.rfcMessageId);
+      if (uids.length === 0) {
+        throw new Error(
+          `[${this.name}] cannot delete: UID ${uid} stale and no Message-ID match for "${ref.rfcMessageId}" in ${folderPath}`
+        );
+      }
+      await this.client!.messageMove(uids.map(String).join(','), trashPath, { uid: true });
+      this.logger.info(
+        `[${this.name}] delete: UID ${uid} stale, recovered via Message-ID search → moved ${uids.length} message(s) to ${trashPath}`
+      );
+    }
     // Invalidate so the next selectFolder() re-opens in read-only mode cleanly.
     this.currentFolder = undefined;
   }
@@ -264,7 +287,23 @@ export class ImapSource implements SourceProvider {
     return trash?.path;
   }
 
-  public async restoreMessage(ref: RestoreRef): Promise<void> {
+  private async searchByMessageId(folderPath: string, rfcMessageId: string): Promise<number[]> {
+    await this.client!.mailboxOpen(folderPath);
+    // Try angle-bracketed form first (canonical stored shape; some servers
+    // — Yahoo — only match this form despite RFC 3501 specifying substring),
+    // then fall back to the bare value.
+    for (const candidate of [`<${rfcMessageId}>`, rfcMessageId]) {
+      const result = await this.client!.search(
+        { header: { 'message-id': candidate } },
+        { uid: true }
+      );
+      const hits = Array.isArray(result) ? result : [];
+      if (hits.length > 0) return hits;
+    }
+    return [];
+  }
+
+  public async restoreMessage(ref: RestoreRef): Promise<RestoreOutcome> {
     if (!ref.rfcMessageId) {
       throw new Error(
         `[${this.name}] cannot restore without an RFC Message-ID (sourceMessageId=${ref.sourceMessageId})`
@@ -275,24 +314,19 @@ export class ImapSource implements SourceProvider {
     if (!trashPath) {
       throw new Error(`[${this.name}] has no \\Trash folder; cannot restore`);
     }
-    await this.client!.mailboxOpen(trashPath);
+    const uids = await this.searchByMessageId(trashPath, ref.rfcMessageId);
     this.currentFolder = undefined;
 
-    // IMAP HEADER search does substring matching on the raw header value;
-    // most servers store Message-ID with angle brackets, and the substring
-    // match works regardless of how we pass it.
-    const searchResult = await this.client!.search(
-      { header: { 'message-id': ref.rfcMessageId } },
-      { uid: true }
-    );
-    const uids = Array.isArray(searchResult) ? searchResult : [];
     if (uids.length === 0) {
-      throw new Error(
-        `[${this.name}] found no message with Message-ID "${ref.rfcMessageId}" in ${trashPath}`
-      );
+      // The source no longer has this message in Trash. Common with providers
+      // that re-run their spam classifier after our IMAP move (Yahoo is known
+      // to do this with short verification-code mails). Caller drops the
+      // tombstone — there is nothing to retry against.
+      return 'not-in-trash';
     }
     await this.client!.messageMove(uids.map(String).join(','), 'INBOX', { uid: true });
     this.currentFolder = undefined;
+    return 'restored';
   }
 
   private selectTargetFolders(

@@ -254,11 +254,11 @@ export class SyncEngine {
     const cfg = this.sourceConfig.deleteSync;
 
     if (!cfg.enabled) {
-      this.logger.debug(`[${sourceName}] delete-sync: disabled; skipping`);
+      this.logger.debug(`[${sourceName}] delete-sync → disabled; skipping`);
       return;
     }
 
-    const tag = `[${sourceName}] delete-sync:${dryRun ? ' [DRY RUN]' : ''} `;
+    const tag = `[${sourceName}] delete-sync${dryRun ? ' [DRY RUN]' : ''} → `;
 
     await this.destination.connect();
     const candidates = await this.destination.listPropagatableDeletions(sourceName);
@@ -293,7 +293,10 @@ export class SyncEngine {
             `${tag}would move source message to Trash: ${sourceMessageId} (Gmail ${c.folder} UID ${c.uid})`
           );
         } else {
-          await this.source.deleteMessage({ id: sourceMessageId });
+          await this.source.deleteMessage({
+            id: sourceMessageId,
+            rfcMessageId: c.rfcMessageId,
+          });
           await this.destination.markPropagated({ folder: c.folder, uid: c.uid });
           await this.state.recordPropagatedTombstone({
             gmailMsgId: c.gmailMsgId,
@@ -330,7 +333,7 @@ export class SyncEngine {
 
     if (!cfg.enabled) return;
 
-    const tag = `[${sourceName}] delete-sync (restore):${dryRun ? ' [DRY RUN]' : ''} `;
+    const tag = `[${sourceName}] delete-sync (restore)${dryRun ? ' [DRY RUN]' : ''} → `;
 
     const tombstones = await this.state.listPropagatedTombstones(sourceName);
     if (tombstones.length === 0) {
@@ -349,6 +352,7 @@ export class SyncEngine {
     let hardDeleted = 0;
     let pending = 0;
     let expired = 0;
+    let unrestorable = 0;
     let errors = 0;
 
     for (const t of tombstones) {
@@ -364,15 +368,8 @@ export class SyncEngine {
         continue;
       }
 
-      if (!t.rfcMessageId) {
-        // Can't check restoration without a stable header-level identifier.
-        // Leave the row; it'll age out via the ageCutoff path.
-        pending++;
-        continue;
-      }
-
       try {
-        const state = await this.destination.checkRestoration(t.rfcMessageId);
+        const state = await this.destination.checkRestoration(t.gmailMsgId);
         if (state === 'in-trash-or-spam') {
           pending++;
           continue;
@@ -382,33 +379,60 @@ export class SyncEngine {
           await this.state.removePropagatedTombstone(t.gmailMsgId);
           continue;
         }
+        // state === 'restored' — actually performing the source-side restore
+        // requires the RFC Message-ID (IMAP providers locate by header).
+        // Without it, leave the tombstone for the next pass; ageCutoff will
+        // eventually clear it if the situation never resolves.
+        if (!t.rfcMessageId) {
+          pending++;
+          continue;
+        }
         if (dryRun) {
           this.logger.info(
             `${tag}would restore source message: sourceId=${t.sourceMessageId} rfcId=${t.rfcMessageId}`
           );
+          restored++;
         } else {
-          await this.source.restoreMessage({
+          const outcome = await this.source.restoreMessage({
             rfcMessageId: t.rfcMessageId,
             sourceMessageId: t.sourceMessageId,
           });
           await this.state.removePropagatedTombstone(t.gmailMsgId);
-          this.logger.info(
-            `${tag}restored source message to INBOX: sourceId=${t.sourceMessageId} rfcId=${t.rfcMessageId}`
-          );
+          if (outcome === 'restored') {
+            // Strip the propagated label so a future re-deletion of the same
+            // Gmail copy will be detected. listPropagatableDeletions filters
+            // out already-marked messages — without this the second delete
+            // becomes silently invisible. Best-effort: a failure to unmark
+            // doesn't roll back the (successful) source-side restore.
+            try {
+              await this.destination.unmarkPropagated(t.gmailMsgId);
+            } catch (err) {
+              const message = err instanceof Error ? err.message : String(err);
+              this.logger.warn(
+                `${tag}restore succeeded but failed to remove propagated label on Gmail (future re-deletion of this message will not propagate): gmailMsgId=${t.gmailMsgId}: ${message}`
+              );
+            }
+            this.logger.info(
+              `${tag}restored source message to INBOX: sourceId=${t.sourceMessageId} rfcId=${t.rfcMessageId}`
+            );
+            restored++;
+          } else {
+            this.logger.warn(
+              `${tag}source no longer has this message in Trash; cannot mirror restore (likely re-classified or expired). sourceId=${t.sourceMessageId} rfcId=${t.rfcMessageId}`
+            );
+            unrestorable++;
+          }
         }
-        restored++;
       } catch (err) {
         errors++;
         const message = err instanceof Error ? err.message : String(err);
-        this.logger.error(
-          `${tag}failed to check/restore rfcId=${t.rfcMessageId ?? '(none)'}: ${message}`
-        );
+        this.logger.error(`${tag}failed to check/restore gmailMsgId=${t.gmailMsgId}: ${message}`);
       }
     }
 
-    if (restored > 0 || hardDeleted > 0 || expired > 0 || errors > 0) {
+    if (restored > 0 || hardDeleted > 0 || expired > 0 || unrestorable > 0 || errors > 0) {
       this.logger.info(
-        `${tag}done: restored=${restored} hard-deleted=${hardDeleted} pending=${pending} expired=${expired} errors=${errors}`
+        `${tag}done: restored=${restored} hard-deleted=${hardDeleted} pending=${pending} expired=${expired} unrestorable=${unrestorable} errors=${errors}`
       );
     }
   }
