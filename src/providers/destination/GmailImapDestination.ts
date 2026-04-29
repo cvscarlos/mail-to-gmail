@@ -16,7 +16,7 @@ import {
 } from '../../core/constants.js';
 import { getHeader, parseMessageId } from '../../core/mimeUtils.js';
 
-export interface GmailConfig {
+interface GmailConfig {
   /** Destination name from config.yaml (e.g. `gmail-main`). Used in log lines. */
   name: string;
   email: string;

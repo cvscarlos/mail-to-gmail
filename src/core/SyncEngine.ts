@@ -15,7 +15,7 @@ import {
 import { injectHeader, parseListId, parseMessageId } from './mimeUtils.js';
 import { CONTENT_HASH_HEADER, SOURCE_MESSAGE_ID_HEADER, SOURCE_NAME_HEADER } from './constants.js';
 
-export interface SyncEngineArgs {
+interface SyncEngineArgs {
   sourceConfig: SourceConfig;
   source: SourceProvider;
   destinationConfig: DestinationConfig;
@@ -24,7 +24,7 @@ export interface SyncEngineArgs {
   logger: Logger;
 }
 
-export interface SyncRunOptions {
+interface SyncRunOptions {
   dryRun?: boolean;
   abort?: AbortSignal;
 }

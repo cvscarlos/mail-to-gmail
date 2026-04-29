@@ -1,4 +1,4 @@
-export interface ZohoCreds {
+interface ZohoCreds {
   dc: string;
   clientId: string;
   clientSecret: string;
@@ -6,12 +6,12 @@ export interface ZohoCreds {
   accountId?: string;
 }
 
-export interface ImapCreds {
+interface ImapCreds {
   email: string;
   appPassword: string;
 }
 
-export interface GmailImapCreds {
+interface GmailImapCreds {
   email: string;
   appPassword: string;
 }

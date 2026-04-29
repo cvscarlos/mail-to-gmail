@@ -179,7 +179,7 @@ export interface Logger {
 }
 
 export type SourceKind = 'zoho-api' | 'imap';
-export type ImapPreset = 'yahoo' | 'outlook';
+type ImapPreset = 'yahoo' | 'outlook';
 
 export interface FilterConfig {
   subjectContains?: string[];
@@ -188,18 +188,18 @@ export interface FilterConfig {
   listIdContains?: string[];
 }
 
-export interface ScheduleConfig {
+interface ScheduleConfig {
   intervalMinutes: number;
   lookbackDays: number;
   maxMessagesPerRun: number;
 }
 
-export interface DeleteSyncConfig {
+interface DeleteSyncConfig {
   enabled: boolean;
   maxPropagationsPerRun: number;
 }
 
-export interface ZohoSourceConfig {
+interface ZohoSourceConfig {
   name: string;
   enabled: boolean;
   type: 'zoho-api';
@@ -213,7 +213,7 @@ export interface ZohoSourceConfig {
   deleteSync: DeleteSyncConfig;
 }
 
-export interface ImapSourceConfig {
+interface ImapSourceConfig {
   name: string;
   enabled: boolean;
   type: 'imap';

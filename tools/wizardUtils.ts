@@ -1,7 +1,7 @@
 import fs from 'fs';
 import YAML from 'yaml';
 
-export interface LoadedYamlConfig {
+interface LoadedYamlConfig {
   destinations: unknown[];
   sources: unknown[];
 }

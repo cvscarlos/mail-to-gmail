@@ -10,7 +10,7 @@ import {
   type SyncCheckpoint,
 } from '../../core/types.js';
 
-export interface ImapSourceOptions {
+interface ImapSourceOptions {
   name: string;
   host: string;
   port: number;

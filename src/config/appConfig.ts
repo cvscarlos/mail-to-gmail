@@ -153,17 +153,7 @@ export function getDestination(cfg: AppConfig, name: string): DestinationConfig 
   return dest;
 }
 
-export function getSource(cfg: AppConfig, name: string): SourceConfig {
-  const src = cfg.sources.find((s) => s.name === name);
-  if (!src) {
-    throw new Error(
-      `Source "${name}" not found. Known: ${cfg.sources.map((s) => s.name).join(', ') || '(none)'}.`
-    );
-  }
-  return src;
-}
-
-export const IMAP_PRESETS: Record<string, { host: string; port: number; tls: boolean }> = {
+const IMAP_PRESETS: Record<string, { host: string; port: number; tls: boolean }> = {
   yahoo: { host: 'imap.mail.yahoo.com', port: 993, tls: true },
   outlook: { host: 'outlook.office365.com', port: 993, tls: true },
 };

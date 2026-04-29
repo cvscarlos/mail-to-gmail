@@ -12,14 +12,14 @@ import { getDestination } from '../config/appConfig.js';
 import { createDestination, createSource } from '../providers/factories.js';
 import { ImapSource } from '../providers/source/ImapSource.js';
 
-export interface SyncSchedulerOptions {
+interface SyncSchedulerOptions {
   appConfig: AppConfig;
   state: StateStore;
   logger: Logger;
   dryRun?: boolean;
 }
 
-export interface SyncSchedulerRunOptions {
+interface SyncSchedulerRunOptions {
   abort: AbortSignal;
   runOnce?: boolean;
   onlySource?: string;

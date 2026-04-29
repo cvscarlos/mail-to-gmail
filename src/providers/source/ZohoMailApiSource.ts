@@ -9,7 +9,7 @@ import {
   type SyncCheckpoint,
 } from '../../core/types.js';
 
-export interface ZohoConfig {
+interface ZohoConfig {
   dc: string;
   clientId: string;
   clientSecret: string;

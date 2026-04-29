@@ -7,7 +7,7 @@ const configSchema = z.object({
   DRY_RUN: z.preprocess((val) => val === 'true' || val === true, z.boolean()).default(false),
 });
 
-export type AppEnv = z.infer<typeof configSchema>;
+type AppEnv = z.infer<typeof configSchema>;
 
 export const loadAppEnv = (): AppEnv => {
   const result = configSchema.safeParse(process.env);
