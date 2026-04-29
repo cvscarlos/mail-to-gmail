@@ -254,6 +254,7 @@ mail-to-gmail sync --once                  # single pass, then exit
 mail-to-gmail sync --dry-run               # no APPEND, no state writes
 mail-to-gmail test-source zoho-main        # connect source + its destination, no writes
 mail-to-gmail reset yahoo-main             # clear checkpoint + seen_messages for one source
+mail-to-gmail reset yahoo-main --yes --force  # same, but skip the daemon lockfile (run while daemon is up)
 mail-to-gmail list                         # print destinations and sources
 ```
 
