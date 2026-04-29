@@ -205,7 +205,11 @@ program
   .command('reset <source-name>')
   .description('Clear checkpoint + seen_messages for one source (forces next run to re-walk)')
   .option('--yes', 'Skip confirmation prompt')
-  .action(async (sourceName: string, opts: { yes?: boolean }) => {
+  .option(
+    '--force',
+    'Skip the daemon lockfile (use only when the running daemon should keep going). SQLite-level concurrency is still safe; the running scheduler picks up the cleared state on its next cycle.'
+  )
+  .action(async (sourceName: string, opts: { yes?: boolean; force?: boolean }) => {
     const env = loadAppEnv();
     const logger = createLogger(env.APP_LOG_LEVEL);
     const appConfig = loadAppConfig(env.CONFIG_PATH);
@@ -235,18 +239,25 @@ program
     }
 
     const state = new SqliteStateStore(env.STATE_DB_PATH);
-    const release = await acquireLock(env.STATE_DB_PATH, logger).catch((err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err);
-      logger.error(`Cannot acquire lock: ${message}. Stop the daemon first.`);
-      state.close();
-      process.exit(1);
-    });
+    let release: (() => Promise<void>) | undefined;
+    if (opts.force) {
+      logger.warn(
+        `[${sourceName}] reset --force: bypassing the daemon lockfile. SQLite serialises writes internally, but ensure you understand the running daemon may finish its current cycle on stale state before picking up the reset.`
+      );
+    } else {
+      release = await acquireLock(env.STATE_DB_PATH, logger).catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.error(`Cannot acquire lock: ${message}. Stop the daemon first, or pass --force.`);
+        state.close();
+        process.exit(1);
+      });
+    }
 
     try {
       await state.resetSource(sourceName);
       logger.info(`[${sourceName}] ✓ reset`);
     } finally {
-      await release();
+      if (release) await release();
       state.close();
     }
   });
