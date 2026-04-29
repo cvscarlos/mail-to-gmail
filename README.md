@@ -208,6 +208,8 @@ schedule:
   maxMessagesPerRun: 100 # processing cap per iteration
 ```
 
+Each poll re-checks the **last 10 minutes before the persisted checkpoint** as a safety overlap. This protects against the case where a later message (B) advances the watermark past an earlier message (A) that hadn't yet been visible to the source's API at the time B was imported — without the overlap, A would be invisible forever. The local `seen_messages` table (and Gmail-side dedup as a backstop) prevents duplicates from the re-checked window.
+
 ## Delete sync (optional, off by default)
 
 When enabled per source, deletions in Gmail are mirrored back to the source's own Trash. Restoring a Gmail-side message back to your inbox triggers a matching restore on the source.

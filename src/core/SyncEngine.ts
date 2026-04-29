@@ -86,20 +86,29 @@ export class SyncEngine {
     await this.destination.ensureReady();
 
     let checkpoint = await this.state.loadCheckpoint(sourceName);
-    if (!checkpoint.lastReceivedAt && schedule.lookbackDays > 0) {
+    let effectiveSince: string | undefined = checkpoint.lastReceivedAt;
+    if (!effectiveSince && schedule.lookbackDays > 0) {
       const lookbackStart = new Date(Date.now() - schedule.lookbackDays * 86_400_000);
-      checkpoint = { lastReceivedAt: lookbackStart.toISOString() };
+      effectiveSince = lookbackStart.toISOString();
+      checkpoint = { lastReceivedAt: effectiveSince };
       this.logger.info(
-        `${prefix}No checkpoint. Using lookback of ${schedule.lookbackDays} day(s) → ${checkpoint.lastReceivedAt}`
+        `${prefix}No checkpoint. Using lookback of ${schedule.lookbackDays} day(s) → ${effectiveSince}`
       );
+    } else if (effectiveSince) {
+      effectiveSince = new Date(
+        new Date(effectiveSince).getTime() - CHECKPOINT_SAFETY_BUFFER_MS
+      ).toISOString();
     }
 
     const wantsListId = filterRequiresListId(filter);
-    const candidates = await this.source.listCandidateMessages(checkpoint, {
-      folders: this.sourceConfig.folders,
-      excludeFolders: this.sourceConfig.excludeFolders,
-      fetchListId: wantsListId,
-    });
+    const candidates = await this.source.listCandidateMessages(
+      { lastReceivedAt: effectiveSince },
+      {
+        folders: this.sourceConfig.folders,
+        excludeFolders: this.sourceConfig.excludeFolders,
+        fetchListId: wantsListId,
+      }
+    );
     this.logger.info(`${prefix}${candidates.length} candidate(s)`);
 
     const latestCheckpoint: SyncCheckpoint = { ...checkpoint };
@@ -442,3 +451,15 @@ export class SyncEngine {
 // 30 days; after ~35 we can safely forget — a restoration after that window is
 // effectively impossible anyway.
 const RESTORATION_TRACKING_DAYS = 35;
+
+// Subtracted from the checkpoint's lastReceivedAt when computing the read-side
+// `since` filter, so we re-check a small overlap window each poll. Defends
+// against the "later message advances the watermark past an earlier one"
+// race: provider indexing delay or clock skew can make message A visible
+// after message B, even though A.receivedAt < B.receivedAt. Without the
+// buffer, importing B advances the checkpoint past A and A is invisible
+// forever. The persisted checkpoint is unaffected — it still tracks the
+// highest imported receivedAt, so we don't drift backward each cycle.
+// Re-checked messages are caught by the seen_messages local hasSeen check
+// (and Gmail-dedup as a backstop), so no duplicates are created.
+const CHECKPOINT_SAFETY_BUFFER_MS = 10 * 60 * 1000;
