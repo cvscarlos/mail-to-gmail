@@ -164,24 +164,25 @@ sources:
 
 ## Setting up Zoho OAuth credentials
 
-The Zoho source uses OAuth2 with a long-lived refresh token. You create a **Self Client** in Zoho's API console once, exchange a short-lived authorization code for a refresh token, and store the result in `.env`. The `npm run setup:zoho` wizard handles the exchange step.
+> **Just run the wizard — don't do this by hand.**
+>
+> ```bash
+> npm run setup:zoho
+> ```
+>
+> It walks you through every value, exchanges the one-shot authorization code for a refresh token, verifies the scopes against your account, and prints a ready-to-paste `.env` block. Without the wizard, the authorization code looks like a token and is easy to mistake for the refresh token — and pasting it directly into `.env` produces a confusing `INVALID_OAUTHTOKEN` at runtime.
 
-1. **Sign in to Zoho's API Console:** [https://api-console.zoho.com/](https://api-console.zoho.com/) — use the same Zoho account whose mail you want to sync. If the URL redirects you to a regional console (`accounts.zoho.eu`, `accounts.zoho.in`, etc.), that's the **data center** value you'll pick in the wizard (`eu`, `in`, etc.).
-2. **Create a new client:**
-   - Click **Add Client** → **Self Client** → **Create Now**.
-   - Confirm. You'll land on the client's detail page with a **Client ID** and **Client Secret**. Keep this tab open — you'll paste these into the wizard.
-3. **Generate the Authorization Code:**
-   - On the same page, switch to the **Generate Code** tab.
+The wizard will prompt you for four values you collect from Zoho's API console at [https://api-console.zoho.com/](https://api-console.zoho.com/). Here's where to find each one:
+
+1. **Data center.** Sign in with the same Zoho account whose mail you want to sync. If the URL redirects you to `accounts.zoho.eu`, `.in`, `.com.au`, etc., that letter cluster is the **data center** value the wizard wants (`eu`, `in`, `com.au`, …).
+2. **Client ID and Client Secret.** Click **Add Client** → **Self Client** → **Create Now** → confirm. You land on the detail page showing both values. Keep the tab open.
+3. **Authorization code** (the only value with a deadline). On the same page, open the **Generate Code** tab:
    - **Scope** — paste exactly: `ZohoMail.messages.READ,ZohoMail.accounts.READ,ZohoMail.folders.READ` (comma-separated, no spaces).
-   - **Time Duration** — pick 10 minutes (you only need the code long enough to run the wizard once).
+   - **Time Duration** — `10 Minutes` is fine; the wizard will use it once.
    - **Scope Description** — anything, e.g. `mail-to-gmail`.
-   - Click **Create**. Zoho shows a short alphanumeric code. Copy it. **This is not the refresh token — it's a one-shot authorization code that expires in 10 minutes and must be exchanged in the next step. Do not paste it into `.env` directly.**
-4. **Run the wizard within those 10 minutes:**
-   ```bash
-   npm run setup:zoho
-   ```
-   It will ask for the data center, a `credentialsPrefix` (e.g. `ZOHO_MAIN`), the Client ID, Client Secret, and the authorization code. It exchanges the code for a refresh token, verifies the three scopes work against your account, and prints a ready-to-paste `.env` block.
-5. **Paste the block into `.env`** and you're done. Refresh tokens don't expire as long as you keep using them; you won't need to repeat this unless you revoke the client or change accounts.
+   - Click **Create**. Copy the short alphanumeric code that appears.
+
+Now run `npm run setup:zoho`, paste each value when prompted, and copy the printed `.env` block into your `.env` file. Refresh tokens don't expire as long as the daemon keeps using them; you only repeat this if you revoke the Self Client or switch accounts.
 
 > **Note:** the three scopes above are read-only. Enabling **delete sync** on a Zoho source needs an additional Zoho write scope (something like `ZohoMail.messages.UPDATE`) — the current wizard does not request it. If you turn `deleteSync.enabled: true` on a Zoho source today, the `moveToTrash` / `moveToFolder` calls will fail at runtime.
 
