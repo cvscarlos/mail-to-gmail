@@ -175,7 +175,7 @@ The Zoho source uses OAuth2 with a long-lived refresh token. You create a **Self
    - **Scope** — paste exactly: `ZohoMail.messages.READ,ZohoMail.accounts.READ,ZohoMail.folders.READ` (comma-separated, no spaces).
    - **Time Duration** — pick 10 minutes (you only need the code long enough to run the wizard once).
    - **Scope Description** — anything, e.g. `mail-to-gmail`.
-   - Click **Create**. Zoho shows a short alphanumeric code. Copy it.
+   - Click **Create**. Zoho shows a short alphanumeric code. Copy it. **This is not the refresh token — it's a one-shot authorization code that expires in 10 minutes and must be exchanged in the next step. Do not paste it into `.env` directly.**
 4. **Run the wizard within those 10 minutes:**
    ```bash
    npm run setup:zoho
