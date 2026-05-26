@@ -47,6 +47,7 @@ npm run setup:imap-source             # optional — interactive Yahoo/Outlook s
 npm run setup:gmail-destination       # optional — interactive Gmail destination wizard
 
 npm run build
+npm start -- sync --dry-run           # rehearse once: logs what would sync, writes nothing
 npm start                             # starts the daemon
 ```
 
@@ -274,14 +275,14 @@ See [`DESIGN.md`](./DESIGN.md) §10 "Delete sync" for the full decision table, r
 ## CLI
 
 ```bash
-mail-to-gmail sync                         # daemon, all enabled sources
+mail-to-gmail sync                            # daemon, all enabled sources
 mail-to-gmail sync --source yahoo-main
-mail-to-gmail sync --once                  # single pass, then exit
-mail-to-gmail sync --dry-run               # no APPEND, no state writes
-mail-to-gmail test-source zoho-main        # connect source + its destination, no writes
-mail-to-gmail reset yahoo-main             # clear checkpoint + seen_messages for one source
+mail-to-gmail sync --once                     # single pass, then exit
+mail-to-gmail sync --dry-run                  # no APPEND, no state writes
+mail-to-gmail test-source zoho-main           # connect source + its destination, no writes
+mail-to-gmail reset yahoo-main                # clear checkpoint + seen_messages for one source
 mail-to-gmail reset yahoo-main --yes --force  # same, but skip the daemon lockfile (run while daemon is up)
-mail-to-gmail list                         # print destinations and sources
+mail-to-gmail list                            # print destinations and sources
 ```
 
 ## Docker (dev)
@@ -339,7 +340,3 @@ Node runtime tuning (heap caps, GC flags) is left to the deployment. On a tight 
 | `tools/`                     | Setup wizards that test credentials and append to `config.yaml` / `.env`. |
 
 See [`DESIGN.md`](./DESIGN.md) for details on the dedup strategy and how to add a new source type.
-
-## Credits
-
-Inspired by [turbogmailify](https://github.com/YoRyan/turbogmailify)'s IDLE-driven design. Archive semantics (no source expunge) and IMAP APPEND instead of the Gmail API.
