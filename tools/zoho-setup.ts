@@ -100,7 +100,7 @@ async function run(): Promise<void> {
 
   const { defaults, maskedSecret } = readEnvDefaults();
 
-  const dc: string = await select({
+  const dc = await select<string>({
     message: 'Zoho data center:',
     choices: [
       { name: 'com (United States / global)', value: 'com' },
