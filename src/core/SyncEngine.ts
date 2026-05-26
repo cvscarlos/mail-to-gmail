@@ -14,6 +14,7 @@ import {
 } from './types.js';
 import { injectHeader, parseListId, parseMessageId } from './mimeUtils.js';
 import { CONTENT_HASH_HEADER, SOURCE_MESSAGE_ID_HEADER, SOURCE_NAME_HEADER } from './constants.js';
+import { describeError } from '../utils/errors.js';
 
 interface SyncEngineArgs {
   sourceConfig: SourceConfig;
@@ -216,14 +217,14 @@ export class SyncEngine {
             retries: dryRun ? 0 : 3,
             onFailedAttempt: (err) => {
               this.logger.warn(
-                `${prefix}Attempt ${err.attemptNumber} failed for ${msg.id}: ${err.error.message}`
+                `${prefix}Attempt ${err.attemptNumber} failed for ${msg.id}: ${describeError(err.error)}`
               );
             },
           }
         );
       } catch (err) {
         errors++;
-        const message = err instanceof Error ? err.message : String(err);
+        const message = describeError(err);
         this.logger.error(`${prefix}Failed to sync ${msg.id}: ${message}`);
       }
     }
@@ -321,7 +322,7 @@ export class SyncEngine {
         propagated++;
       } catch (err) {
         errors++;
-        const message = err instanceof Error ? err.message : String(err);
+        const message = describeError(err);
         this.logger.error(`${tag}failed to propagate ${sourceMessageId}: ${message}`);
       }
     }
@@ -416,7 +417,7 @@ export class SyncEngine {
             try {
               await this.destination.unmarkPropagated(t.gmailMsgId);
             } catch (err) {
-              const message = err instanceof Error ? err.message : String(err);
+              const message = describeError(err);
               this.logger.warn(
                 `${tag}restore succeeded but failed to remove propagated label on Gmail (future re-deletion of this message will not propagate): gmailMsgId=${t.gmailMsgId}: ${message}`
               );
@@ -434,7 +435,7 @@ export class SyncEngine {
         }
       } catch (err) {
         errors++;
-        const message = err instanceof Error ? err.message : String(err);
+        const message = describeError(err);
         this.logger.error(`${tag}failed to check/restore gmailMsgId=${t.gmailMsgId}: ${message}`);
       }
     }

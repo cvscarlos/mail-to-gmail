@@ -15,6 +15,7 @@ import {
   SOURCE_NAME_HEADER,
 } from '../../core/constants.js';
 import { getHeader, parseMessageId } from '../../core/mimeUtils.js';
+import { describeError } from '../../utils/errors.js';
 
 interface GmailConfig {
   /** Destination name from config.yaml (e.g. `gmail-main`). Used in log lines. */
@@ -69,7 +70,7 @@ export class GmailImapDestination implements DestinationProvider {
       try {
         await this.client.logout();
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = describeError(err);
         this.logger.info(
           `[${this.name}] stale-client logout failed (socket likely already closed): ${message}`
         );
@@ -92,7 +93,7 @@ export class GmailImapDestination implements DestinationProvider {
     // the daemon between sync ticks. We drop our reference to the dead client so
     // the next connect() call rebuilds a fresh one.
     client.on('error', (err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = describeError(err);
       this.logger.warn(`[${this.name}] async error: ${message} (will reconnect on next use)`);
       if (this.client !== client) return;
       this.client = undefined;
@@ -112,7 +113,7 @@ export class GmailImapDestination implements DestinationProvider {
     try {
       await this.client.logout();
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = describeError(err);
       this.logger.info(`[${this.name}] logout failed (socket likely already closed): ${message}`);
     }
     this.client = undefined;
@@ -185,7 +186,7 @@ export class GmailImapDestination implements DestinationProvider {
       try {
         await this.client!.mailboxOpen(folder);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = describeError(err);
         this.logger.info(`[${this.name}] delete-sync → cannot open ${folder}: ${message}`);
         continue;
       }

@@ -11,6 +11,7 @@ import { SyncEngine } from './SyncEngine.js';
 import { getDestination } from '../config/appConfig.js';
 import { createDestination, createSource } from '../providers/factories.js';
 import { ImapSource } from '../providers/source/ImapSource.js';
+import { describeError } from '../utils/errors.js';
 
 interface SyncSchedulerOptions {
   appConfig: AppConfig;
@@ -113,7 +114,7 @@ export class SyncScheduler {
       try {
         await provider.startIdleWatch();
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = describeError(err);
         this.logger.warn(`[${source.name}] IDLE watch failed: ${message}`);
       }
     }
@@ -145,13 +146,13 @@ export class SyncScheduler {
       } catch (err) {
         // Delete-sync is best-effort and independent of forward ingestion.
         // Log and continue — do not trip the forward-sync backoff.
-        const message = err instanceof Error ? err.message : String(err);
+        const message = describeError(err);
         this.logger.error(`[${source.name}] delete-sync → pass failed: ${message}`);
       }
       this.backoffMs.delete(source.name);
       this.nextDueAt.set(source.name, Date.now() + source.schedule.intervalMinutes * 60_000);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = describeError(err);
       const prev = this.backoffMs.get(source.name) ?? MIN_BACKOFF_MS;
       const next = Math.min(prev * 2, MAX_BACKOFF_MS);
       this.backoffMs.set(source.name, next);
@@ -164,7 +165,7 @@ export class SyncScheduler {
         try {
           await provider.startIdleWatch();
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = describeError(err);
           this.logger.warn(`[${source.name}] IDLE restart failed: ${message}`);
         }
       }
@@ -195,7 +196,7 @@ export class SyncScheduler {
       try {
         await provider.disconnect();
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = describeError(err);
         this.logger.warn(`[${name}] source disconnect error: ${message}`);
       }
     }
@@ -203,7 +204,7 @@ export class SyncScheduler {
       try {
         await provider.disconnect();
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = describeError(err);
         this.logger.warn(`[${name}] destination disconnect error: ${message}`);
       }
     }

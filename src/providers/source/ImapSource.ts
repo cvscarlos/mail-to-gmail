@@ -9,6 +9,7 @@ import {
   type SourceProvider,
   type SyncCheckpoint,
 } from '../../core/types.js';
+import { describeError } from '../../utils/errors.js';
 
 interface ImapSourceOptions {
   name: string;
@@ -133,7 +134,7 @@ export class ImapSource implements SourceProvider {
       try {
         await this.client.logout();
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = describeError(err);
         this.logger.info(
           `[${this.name}] stale-client logout failed (socket likely already closed): ${message}`
         );
@@ -154,7 +155,7 @@ export class ImapSource implements SourceProvider {
     // the daemon between sync ticks. We drop our reference to the dead client so
     // the next connect() call rebuilds a fresh one.
     client.on('error', (err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = describeError(err);
       this.logger.warn(`[${this.name}] async error: ${message} (will reconnect on next use)`);
       if (this.client === client) {
         this.client = undefined;
@@ -171,7 +172,7 @@ export class ImapSource implements SourceProvider {
     try {
       await this.client.logout();
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = describeError(err);
       this.logger.info(`[${this.name}] logout failed (socket likely already closed): ${message}`);
     }
     this.client = undefined;
