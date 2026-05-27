@@ -244,3 +244,25 @@ export interface AppConfig {
   destinations: DestinationConfig[];
   sources: SourceConfig[];
 }
+
+/**
+ * Per-component health, captured by the daemon as a side effect of normal syncs
+ * (no dedicated probing) and read by the `health` command for Docker HEALTHCHECK.
+ */
+export interface HealthComponentEntry {
+  lastSuccessAt: string | null;
+  lastErrorAt: string | null;
+  lastError: string | null;
+  consecutiveFailures: number;
+  /** Sources only — used to compute the staleness threshold (intervalMinutes × 2). */
+  intervalMinutes?: number;
+}
+
+export interface HealthSnapshot {
+  writtenAt: string;
+  pid: number;
+  startedAt: string;
+  version: string;
+  sources: Record<string, HealthComponentEntry>;
+  destinations: Record<string, HealthComponentEntry>;
+}

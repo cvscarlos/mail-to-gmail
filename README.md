@@ -283,6 +283,7 @@ mail-to-gmail test-source zoho-main           # connect source + its destination
 mail-to-gmail reset yahoo-main                # clear checkpoint + seen_messages for one source
 mail-to-gmail reset yahoo-main --yes --force  # same, but skip the daemon lockfile (run while daemon is up)
 mail-to-gmail list                            # print destinations and sources
+mail-to-gmail health                          # exit 0 if all sources/destinations + DB are healthy
 ```
 
 ## Docker (dev)
@@ -301,6 +302,27 @@ docker run --rm \
 ```
 
 The Dockerfile streams the GitHub tarball through `tar` (no `git` binary installed → ~30 MB smaller image). Override `REPO_OWNER`, `REPO_NAME`, or `REF` via `--build-arg` for forks or tagged releases.
+
+## Health check
+
+The daemon authenticates against every source and destination on each sync tick — that's its normal job. It records those outcomes to `./health.json` (at the working dir, `/app` in Docker — gitignored, ephemeral per container). The `mail-to-gmail health` command reads that file plus an explicit DB-openable check and exits `0`/`1`, so it slots straight into Docker's native `HEALTHCHECK`:
+
+```dockerfile
+HEALTHCHECK --interval=60s --timeout=10s --start-period=180s --retries=2 \
+  CMD ["node", "dist/index.js", "health"]
+```
+
+It reports **unhealthy** when any of these hold:
+
+| Condition                                                         | Meaning                                            |
+| ----------------------------------------------------------------- | -------------------------------------------------- |
+| `health.json` missing or `writtenAt` older than 3 min             | scheduler dead or never completed a cycle          |
+| a source/destination has never succeeded but has a recorded error | credentials rejected (e.g. `AUTHENTICATIONFAILED`) |
+| a source/destination's `consecutiveFailures ≥ 3`                  | sustained failure                                  |
+| a source's `lastSuccessAt` older than `intervalMinutes × 2`       | silently stuck                                     |
+| the SQLite DB won't open                                          | disk full / corruption / bad mount                 |
+
+The probe does **no** network I/O — it never opens its own IMAP/API connections, so it can't compete with the daemon's connections or trip provider rate limits. Failures are attributed to the component that actually failed: a rejected Gmail app password shows as `destination/<name>`, not the source whose sync surfaced it. Inspect the last probe output with `docker inspect --format '{{json .State.Health}}' <container>`.
 
 ## Deduplication and database loss
 

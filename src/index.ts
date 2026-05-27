@@ -7,6 +7,8 @@ import lockfile from 'proper-lockfile';
 import { getDestination, loadAppConfig } from './config/appConfig.js';
 import { SqliteStateStore } from './core/StateStore.js';
 import { SyncScheduler } from './core/SyncScheduler.js';
+import { HealthStore } from './core/HealthStore.js';
+import { registerHealthCommand, resolveHealthFilePath } from './cli/healthCommand.js';
 import { type AppConfig, type Logger, type SourceConfig } from './core/types.js';
 import { createDestination, createSource } from './providers/factories.js';
 import { loadAppEnv } from './utils/config.js';
@@ -134,10 +136,18 @@ program
       `Startup cleanup: pruned ${pruned} seen_messages row(s) older than ${SEEN_MESSAGES_RETENTION_DAYS} days`
     );
 
+    const health = new HealthStore({
+      filePath: resolveHealthFilePath(),
+      appConfig,
+      startedAt: new Date(),
+      version: pkg.version,
+    });
+
     const scheduler = new SyncScheduler({
       appConfig,
       state,
       logger,
+      health,
       dryRun: !!opts.dryRun || env.DRY_RUN,
     });
 
@@ -278,6 +288,8 @@ program
     console.error('reset-checkpoints is deprecated. Use: mail-to-gmail reset <source-name>');
     process.exit(2);
   });
+
+registerHealthCommand(program);
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   const message = err instanceof Error ? err.message : String(err);

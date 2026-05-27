@@ -32,4 +32,10 @@ RUN mkdir -p /data
 ENV STATE_DB_PATH=/data/mail-to-gmail.db
 VOLUME ["/data"]
 
+# Reads ./health.json (written by the daemon at /app) + checks the DB opens.
+# No network probing — reflects the daemon's own per-tick sync outcomes.
+# start-period covers the first sync cycle that populates health.json.
+HEALTHCHECK --interval=60s --timeout=10s --start-period=180s --retries=2 \
+  CMD ["node", "dist/index.js", "health"]
+
 CMD ["node", "dist/index.js", "sync"]

@@ -6,6 +6,7 @@ tmp/
 .env
 filter.json
 config.yaml
+health.json
 *.db
 *.db.lock
 .DS_Store

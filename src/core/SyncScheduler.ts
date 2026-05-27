@@ -12,11 +12,13 @@ import { getDestination } from '../config/appConfig.js';
 import { createDestination, createSource } from '../providers/factories.js';
 import { ImapSource } from '../providers/source/ImapSource.js';
 import { describeError } from '../utils/errors.js';
+import { type HealthStore } from './HealthStore.js';
 
 interface SyncSchedulerOptions {
   appConfig: AppConfig;
   state: StateStore;
   logger: Logger;
+  health: HealthStore;
   dryRun?: boolean;
 }
 
@@ -34,6 +36,7 @@ export class SyncScheduler {
   private readonly appConfig: AppConfig;
   private readonly state: StateStore;
   private readonly logger: Logger;
+  private readonly health: HealthStore;
   private readonly dryRun: boolean;
 
   private readonly sources = new Map<string, SourceProvider>();
@@ -48,6 +51,7 @@ export class SyncScheduler {
     this.appConfig = options.appConfig;
     this.state = options.state;
     this.logger = options.logger;
+    this.health = options.health;
     this.dryRun = !!options.dryRun;
   }
 
@@ -128,9 +132,31 @@ export class SyncScheduler {
       provider.stopIdleWatch();
     }
 
+    const destinationConfig = getDestination(this.appConfig, source.destination);
+    // `attributed` tracks whether the connect/auth phase already recorded a
+    // component-specific health error, so the outer catch doesn't double-record
+    // or mis-blame. The connect phase is where auth failures surface, and it's
+    // the only place we can cleanly tell source-fault from destination-fault.
+    let attributed = false;
     try {
-      const destinationConfig = getDestination(this.appConfig, source.destination);
       const destination = await this.getOrCreateDestination(destinationConfig);
+
+      try {
+        await provider.connect();
+      } catch (err) {
+        this.health.recordSourceError(source.name, describeError(err));
+        attributed = true;
+        throw err;
+      }
+      try {
+        await destination.connect();
+        await destination.ensureReady();
+      } catch (err) {
+        this.health.recordDestinationError(destinationConfig.name, describeError(err));
+        attributed = true;
+        throw err;
+      }
+
       const engine = new SyncEngine({
         sourceConfig: source,
         source: provider,
@@ -140,6 +166,11 @@ export class SyncScheduler {
         logger: this.logger,
       });
       await engine.run({ abort, dryRun: this.dryRun });
+
+      // Forward sync succeeded → both components authenticated and worked.
+      this.health.recordSourceSuccess(source.name);
+      this.health.recordDestinationSuccess(destinationConfig.name);
+
       try {
         await engine.reconcileDeletions({ abort, dryRun: this.dryRun });
         await engine.reconcileRestorations({ abort, dryRun: this.dryRun });
@@ -153,6 +184,8 @@ export class SyncScheduler {
       this.nextDueAt.set(source.name, Date.now() + source.schedule.intervalMinutes * 60_000);
     } catch (err) {
       const message = describeError(err);
+      // Connects succeeded but the sync body threw — attribute to the source job.
+      if (!attributed) this.health.recordSourceError(source.name, message);
       const prev = this.backoffMs.get(source.name) ?? MIN_BACKOFF_MS;
       const next = Math.min(prev * 2, MAX_BACKOFF_MS);
       this.backoffMs.set(source.name, next);
