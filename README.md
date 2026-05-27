@@ -274,20 +274,24 @@ See [`DESIGN.md`](./DESIGN.md) §10 "Delete sync" for the full decision table, r
 
 ## CLI
 
+The daemon runs as `node dist/index.js <command>` after `npm run build`. Run these inside the container (`WORKDIR /app`) — e.g. via your platform's terminal — or locally from the repo root.
+
 ```bash
-mail-to-gmail sync                            # daemon, all enabled sources
-mail-to-gmail sync --source yahoo-main
-mail-to-gmail sync --once                     # single pass, then exit
-mail-to-gmail sync --dry-run                  # no APPEND, no state writes
-mail-to-gmail test-source zoho-main           # connect source + its destination, no writes
-mail-to-gmail reset yahoo-main                # clear checkpoint + seen_messages for one source
-mail-to-gmail reset yahoo-main --yes --force  # same, but skip the daemon lockfile (run while daemon is up)
-mail-to-gmail list                            # print destinations and sources
-mail-to-gmail health                          # exit 0 if all sources/destinations + DB are healthy (reads health.json)
-mail-to-gmail doctor                          # actively connect every source + destination + DB; report per-component status
+node dist/index.js sync                            # daemon, all enabled sources
+node dist/index.js sync --source yahoo-main
+node dist/index.js sync --once                     # single pass, then exit
+node dist/index.js sync --dry-run                  # no APPEND, no state writes
+node dist/index.js test-source zoho-main           # connect source + its destination, no writes
+node dist/index.js reset yahoo-main                # clear checkpoint + seen_messages for one source
+node dist/index.js reset yahoo-main --yes --force  # same, but skip the daemon lockfile (run while daemon is up)
+node dist/index.js list                            # print destinations and sources
+node dist/index.js health                          # exit 0 if all sources/destinations + DB are healthy (reads health.json)
+node dist/index.js doctor                          # actively connect every source + destination + DB; report per-component status
 ```
 
-`health` is the passive probe for Docker (reads the daemon's recorded state, no network). `doctor` is the on-demand diagnostic: run it in the container to actively re-authenticate every source and destination against the **live** environment and see exactly which credential is rejected — e.g. after rotating an app password, to confirm the new value actually reached the container.
+Locally you can skip the build with `npm run start:ts -- <command>` (runs via `tsx`), or use `npm start -- <command>` against an existing `dist/`. Note the `--` so npm passes the flags through (e.g. `npm start -- sync --dry-run`).
+
+`health` is the passive probe for Docker (reads the daemon's recorded `health.json`, no network). `doctor` is the on-demand diagnostic: run it in the container to actively re-authenticate every source and destination against the **live** environment and see exactly which credential is rejected — e.g. after rotating an app password, to confirm the new value actually reached the container.
 
 ## Docker (dev)
 
@@ -308,7 +312,7 @@ The Dockerfile streams the GitHub tarball through `tar` (no `git` binary install
 
 ## Health check
 
-The daemon authenticates against every source and destination on each sync tick — that's its normal job. It records those outcomes to `./health.json` (at the working dir, `/app` in Docker — gitignored, ephemeral per container). The `mail-to-gmail health` command reads that file plus an explicit DB-openable check and exits `0`/`1`, so it slots straight into Docker's native `HEALTHCHECK`:
+The daemon authenticates against every source and destination on each sync tick — that's its normal job. It records those outcomes to `./health.json` (at the working dir, `/app` in Docker — gitignored, ephemeral per container). The `node dist/index.js health` command reads that file plus an explicit DB-openable check and exits `0`/`1`, so it slots straight into Docker's native `HEALTHCHECK`:
 
 ```dockerfile
 HEALTHCHECK --interval=60s --timeout=10s --start-period=180s --retries=2 \
