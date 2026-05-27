@@ -13,6 +13,7 @@ import { type AppConfig, type Logger, type SourceConfig } from './core/types.js'
 import { createDestination, createSource } from './providers/factories.js';
 import { loadAppEnv } from './utils/config.js';
 import { createLogger } from './utils/logger.js';
+import { describeError } from './utils/errors.js';
 
 // Resolve package.json at runtime so `--version` and the startup log line both
 // reflect the currently-installed version without requiring a rebuild step.
@@ -287,6 +288,65 @@ program
   .action(() => {
     console.error('reset-checkpoints is deprecated. Use: mail-to-gmail reset <source-name>');
     process.exit(2);
+  });
+
+program
+  .command('doctor')
+  .description(
+    'Actively connect every enabled source + destination and open the DB, reporting per-component status. Run on the host to verify the live credentials.'
+  )
+  .action(async () => {
+    const env = loadAppEnv();
+    const logger = createLogger(env.APP_LOG_LEVEL);
+    const appConfig = loadAppConfig(env.CONFIG_PATH);
+    let ok = true;
+
+    try {
+      const state = new SqliteStateStore(env.STATE_DB_PATH);
+      try {
+        await state.loadCheckpoint('__doctor__');
+        console.warn(`✓ database  ${env.STATE_DB_PATH}`);
+      } finally {
+        state.close();
+      }
+    } catch (err) {
+      ok = false;
+      console.error(`✗ database  ${env.STATE_DB_PATH}: ${describeError(err)}`);
+    }
+
+    // Destinations are probed once each (a destination shared by multiple sources
+    // only needs verifying once).
+    const destinationNames = new Set(
+      appConfig.sources.filter((s) => s.enabled).map((s) => s.destination)
+    );
+    for (const name of destinationNames) {
+      const provider = createDestination(getDestination(appConfig, name), logger);
+      try {
+        await provider.connect();
+        await provider.ensureReady();
+        console.warn(`✓ destination  ${name}`);
+      } catch (err) {
+        ok = false;
+        console.error(`✗ destination  ${name}: ${describeError(err)}`);
+      } finally {
+        await provider.disconnect().catch(() => {});
+      }
+    }
+
+    for (const source of appConfig.sources.filter((s) => s.enabled)) {
+      const provider = createSource(source, logger);
+      try {
+        await provider.connect();
+        console.warn(`✓ source  ${source.name}`);
+      } catch (err) {
+        ok = false;
+        console.error(`✗ source  ${source.name}: ${describeError(err)}`);
+      } finally {
+        await provider.disconnect().catch(() => {});
+      }
+    }
+
+    process.exit(ok ? 0 : 1);
   });
 
 registerHealthCommand(program);

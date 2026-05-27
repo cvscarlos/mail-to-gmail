@@ -283,8 +283,11 @@ mail-to-gmail test-source zoho-main           # connect source + its destination
 mail-to-gmail reset yahoo-main                # clear checkpoint + seen_messages for one source
 mail-to-gmail reset yahoo-main --yes --force  # same, but skip the daemon lockfile (run while daemon is up)
 mail-to-gmail list                            # print destinations and sources
-mail-to-gmail health                          # exit 0 if all sources/destinations + DB are healthy
+mail-to-gmail health                          # exit 0 if all sources/destinations + DB are healthy (reads health.json)
+mail-to-gmail doctor                          # actively connect every source + destination + DB; report per-component status
 ```
+
+`health` is the passive probe for Docker (reads the daemon's recorded state, no network). `doctor` is the on-demand diagnostic: run it in the container to actively re-authenticate every source and destination against the **live** environment and see exactly which credential is rejected — e.g. after rotating an app password, to confirm the new value actually reached the container.
 
 ## Docker (dev)
 
