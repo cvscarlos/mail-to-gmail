@@ -11,9 +11,7 @@ export function loadYamlConfig(path: string): LoadedYamlConfig {
     return { destinations: [], sources: [] };
   }
   const parsed = YAML.parse(fs.readFileSync(path, 'utf-8')) as
-    | { destinations?: unknown[]; sources?: unknown[] }
-    | undefined
-    | null;
+    { destinations?: unknown[]; sources?: unknown[] } | undefined | null;
   return {
     destinations: parsed?.destinations ?? [],
     sources: parsed?.sources ?? [],

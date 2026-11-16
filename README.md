@@ -126,6 +126,9 @@ sources:
 
     folders: ['*'] # default: ["*"]
     excludeFolders: ['Spam', 'Trash'] # default: ["Spam", "Trash"]
+    # 'Spam' in this list also gates the provider's spam/junk folder (IMAP
+    # \Junk, e.g. Yahoo "Bulk Mail"). Drop 'Spam' — e.g. excludeFolders:
+    # ['Trash'] — to sync spam too. Trash (\Trash) is always skipped.
 
     idle: true # default: false
     idleFolder: INBOX # default: INBOX

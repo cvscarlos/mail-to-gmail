@@ -71,8 +71,15 @@ function hasNoSelectFlag(flags: Set<string> | string[] | undefined): boolean {
   return flags.includes('\\Noselect');
 }
 
-function isSpecialUseExcluded(specialUse: string | undefined): boolean {
-  return specialUse === '\\Junk' || specialUse === '\\Trash';
+// Trash is always skipped (re-importing deleted mail would fight delete-sync).
+// Junk/Spam is gated by config: excluded only while 'Spam' is in excludeFolders
+// (the default), so dropping 'Spam' from a source's excludeFolders syncs it.
+function isTrash(specialUse: string | undefined): boolean {
+  return specialUse === '\\Trash';
+}
+
+function isJunk(specialUse: string | undefined): boolean {
+  return specialUse === '\\Junk';
 }
 
 function firstAddress(list: Array<{ address?: string }> | undefined): string | undefined {
@@ -232,8 +239,7 @@ export class ImapSource implements SourceProvider {
     const { folderPath, uid } = decodeMessageId(ref.id);
     await this.selectFolder(folderPath);
     const msg = (await this.client!.fetchOne(String(uid), { source: true }, { uid: true })) as
-      | FetchMessageObject
-      | undefined;
+      FetchMessageObject | undefined;
     if (!msg || !msg.source) {
       throw new Error(`Message UID ${uid} not found in ${folderPath}`);
     }
@@ -339,9 +345,11 @@ export class ImapSource implements SourceProvider {
     const excludeSet = new Set(options?.excludeFolders ?? [...DEFAULT_EXCLUDES]);
 
     return folders.filter((f) => {
-      if (isSpecialUseExcluded(f.specialUse)) return false;
-      if (includeSet && !includeSet.has(f.name) && !includeSet.has(f.path)) return false;
+      if (isTrash(f.specialUse)) return false;
+      const explicitlyIncluded = includeSet?.has(f.name) || includeSet?.has(f.path);
+      if (includeSet && !explicitlyIncluded) return false;
       if (excludeSet.has(f.name) || excludeSet.has(f.path)) return false;
+      if (isJunk(f.specialUse) && excludeSet.has('Spam') && !explicitlyIncluded) return false;
       return true;
     });
   }

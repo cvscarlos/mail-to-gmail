@@ -105,8 +105,7 @@ export class SqliteStateStore implements StateStore {
 
   public async loadCheckpoint(sourceName: string): Promise<SyncCheckpoint> {
     const row = this.stmtLoad.get(sourceName) as
-      | { last_received_at: string | null; last_message_id: string | null }
-      | undefined;
+      { last_received_at: string | null; last_message_id: string | null } | undefined;
     if (!row) return {};
     return {
       lastReceivedAt: row.last_received_at ?? undefined,
