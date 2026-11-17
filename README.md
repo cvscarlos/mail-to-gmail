@@ -34,6 +34,8 @@ _Self-hosted replacement for Google's retiring [Gmailify](https://support.google
 
 Microsoft 365 / work accounts require XOAUTH2 and are not supported yet.
 
+**Gmail app password:** create one at [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords). The page only exists once [2-Step Verification](https://myaccount.google.com/signinoptions/twosv) is turned on for the account — without it Google shows "The setting you are looking for is not available for your account". Gmail rejects the normal account password over IMAP (`AUTHENTICATIONFAILED`).
+
 ## Quick start
 
 ```bash

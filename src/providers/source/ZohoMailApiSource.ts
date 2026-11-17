@@ -134,12 +134,10 @@ export class ZohoMailApiSource implements SourceProvider {
     );
 
     const since = checkpoint.lastReceivedAt ? new Date(checkpoint.lastReceivedAt) : undefined;
-    const hardCap = options?.limit;
     const collected: MessageMetadata[] = [];
 
     for (const folder of targetFolders) {
-      await this.paginateFolder(accountId, folder, since, hardCap, collected);
-      if (hardCap !== undefined && collected.length >= hardCap) break;
+      await this.paginateFolder(accountId, folder, since, collected);
     }
 
     return collected.sort((a, b) => a.receivedAt.getTime() - b.receivedAt.getTime());
@@ -243,7 +241,6 @@ export class ZohoMailApiSource implements SourceProvider {
     accountId: string,
     folder: ZohoFolder,
     since: Date | undefined,
-    hardCap: number | undefined,
     collected: MessageMetadata[]
   ): Promise<void> {
     const url = `https://mail.zoho.${this.config.dc}/api/accounts/${accountId}/messages/view`;
@@ -287,7 +284,6 @@ export class ZohoMailApiSource implements SourceProvider {
           folderName: folder.folderName,
           rawSize: m.size !== undefined ? Number(m.size) : undefined,
         });
-        if (hardCap !== undefined && collected.length >= hardCap) return;
       }
 
       if (messages.length < MESSAGES_PER_PAGE) return;

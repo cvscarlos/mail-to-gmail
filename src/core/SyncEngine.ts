@@ -107,6 +107,7 @@ export class SyncEngine {
       {
         folders: this.sourceConfig.folders,
         excludeFolders: this.sourceConfig.excludeFolders,
+        limit: schedule.maxMessagesPerRun,
         fetchListId: wantsListId,
       }
     );

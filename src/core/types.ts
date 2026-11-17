@@ -29,6 +29,11 @@ export interface SyncCheckpoint {
 export interface ListOptions {
   folders?: string[];
   excludeFolders?: string[];
+  /**
+   * Hint: return only the `limit` oldest candidates by receivedAt. A source may
+   * ignore it and return everything — the caller still caps the run — but must
+   * never return any other subset, or the checkpoint can skip past mail.
+   */
   limit?: number;
   fetchListId?: boolean;
 }

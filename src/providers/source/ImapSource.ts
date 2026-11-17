@@ -39,6 +39,9 @@ type IdleHandler = (sourceName: string) => void;
 const DEFAULT_EXCLUDES = new Set(['Spam', 'Trash']);
 const LIST_ID_BODY_PART = 'HEADER.FIELDS (LIST-ID)';
 const MESSAGE_ID_DELIMITER = '\u0000';
+// Servers cap command length (Dovecot answers "Too long argument"); years of
+// deletions leave UID gaps, so even a range-packed list can exceed it.
+const UID_FETCH_CHUNK = 500;
 
 function encodeMessageId(folderPath: string, uid: number): string {
   return `${folderPath}${MESSAGE_ID_DELIMITER}${uid}`;
@@ -202,15 +205,45 @@ export class ImapSource implements SourceProvider {
     const limit = options?.limit;
     const wantsListId = !!options?.fetchListId;
 
-    const all: MessageMetadata[] = [];
-
+    let hits: Array<{ folder: FolderEntry; uids: number[] }> = [];
     for (const folder of targetFolders) {
       await this.selectFolder(folder.path);
       const uids = await this.searchFolder(sinceDate);
-      if (uids.length === 0) continue;
+      if (uids.length > 0) hits.push({ folder, uids: [...uids].sort((a, b) => a - b) });
+    }
 
-      const sortedUids = [...uids].sort((a, b) => a - b);
-      for await (const msg of this.fetchEnvelopes(sortedUids, wantsListId)) {
+    // Over the cap (e.g. a first-run backfill): fetch dates only, keep the
+    // `limit` oldest, and fetch envelopes for just those. Picking by UID would
+    // be cheaper but unsafe — a message moved into a folder gets a new, higher
+    // UID while keeping its old date, so a UID cut could skip it while the
+    // checkpoint advances past it.
+    if (limit !== undefined && hits.reduce((n, h) => n + h.uids.length, 0) > limit) {
+      const dated: Array<{ folder: FolderEntry; uid: number; date: Date }> = [];
+      for (const { folder, uids } of hits) {
+        await this.selectFolder(folder.path);
+        for await (const msg of this.fetchChunked(uids, { uid: true, internalDate: true })) {
+          const date = coerceDate(msg.internalDate);
+          if (sinceDate && date < sinceDate) continue;
+          dated.push({ folder, uid: Number(msg.uid), date });
+        }
+      }
+      dated.sort((a, b) => a.date.getTime() - b.date.getTime());
+
+      const kept = new Map<FolderEntry, number[]>();
+      for (const { folder, uid } of dated.slice(0, limit)) {
+        const list = kept.get(folder);
+        if (list) list.push(uid);
+        else kept.set(folder, [uid]);
+      }
+      hits = hits
+        .filter((h) => kept.has(h.folder))
+        .map((h) => ({ folder: h.folder, uids: kept.get(h.folder)!.sort((a, b) => a - b) }));
+    }
+
+    const all: MessageMetadata[] = [];
+    for (const { folder, uids } of hits) {
+      await this.selectFolder(folder.path);
+      for await (const msg of this.fetchEnvelopes(uids, wantsListId)) {
         const internalDate = coerceDate(msg.internalDate);
         if (sinceDate && internalDate < sinceDate) continue;
 
@@ -225,10 +258,7 @@ export class ImapSource implements SourceProvider {
           folderName: folder.name,
           rawSize: msg.size,
         });
-
-        if (limit !== undefined && all.length >= limit) break;
       }
-      if (limit !== undefined && all.length >= limit) break;
     }
 
     return all.sort((a, b) => a.receivedAt.getTime() - b.receivedAt.getTime());
@@ -371,7 +401,16 @@ export class ImapSource implements SourceProvider {
       uid: true,
     };
     if (includeListId) query.bodyParts = [LIST_ID_BODY_PART];
-    return this.client!.fetch(uids, query as Parameters<ImapFlow['fetch']>[1], { uid: true });
+    return this.fetchChunked(uids, query as Parameters<ImapFlow['fetch']>[1]);
+  }
+
+  private async *fetchChunked(
+    uids: number[],
+    query: Parameters<ImapFlow['fetch']>[1]
+  ): AsyncGenerator<FetchMessageObject> {
+    for (let i = 0; i < uids.length; i += UID_FETCH_CHUNK) {
+      yield* this.client!.fetch(uids.slice(i, i + UID_FETCH_CHUNK), query, { uid: true });
+    }
   }
 
   private async listFolders(): Promise<FolderEntry[]> {
