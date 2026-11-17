@@ -212,11 +212,9 @@ export class ImapSource implements SourceProvider {
       if (uids.length > 0) hits.push({ folder, uids: [...uids].sort((a, b) => a - b) });
     }
 
-    // Over the cap (e.g. a first-run backfill): fetch dates only, keep the
-    // `limit` oldest, and fetch envelopes for just those. Picking by UID would
-    // be cheaper but unsafe — a message moved into a folder gets a new, higher
-    // UID while keeping its old date, so a UID cut could skip it while the
-    // checkpoint advances past it.
+    // Pick the oldest by date, not UID: a message moved into a folder gets a
+    // new, higher UID but keeps its old date, so a UID cut could skip it while
+    // the checkpoint advances past it.
     if (limit !== undefined && hits.reduce((n, h) => n + h.uids.length, 0) > limit) {
       const dated: Array<{ folder: FolderEntry; uid: number; date: Date }> = [];
       for (const { folder, uids } of hits) {
